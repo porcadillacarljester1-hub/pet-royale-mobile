@@ -1,0 +1,10 @@
+[[headers]]
+  for = "/assets/*"
+  [headers.values]
+    Content-Type = "font/truetype"
+    Access-Control-Allow-Origin = "*"
+
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
