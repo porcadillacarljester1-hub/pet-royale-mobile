@@ -9,11 +9,11 @@ const GOLD = '#f5c518';
 const BG = '#f0f2f8';
 
 const services = [
-  { label: 'Veterinary Check-ups',       icon: 'heart'             as const, color: '#e53935' },
-  { label: 'Vaccination & Deworming',    icon: 'medical'           as const, color: '#2e7d32' },
-  { label: 'Grooming',                   icon: 'cut'               as const, color: '#6a1b9a' },
-  { label: 'Minor & Major Surgeries',    icon: 'bandage'           as const, color: '#e65100' },
-  { label: 'Confinement & Emergency Care', icon: 'shield-checkmark' as const, color: '#00838f' },
+  { label: 'Veterinary Check-ups',         icon: 'heart'             as const, color: '#e53935' },
+  { label: 'Vaccination & Deworming',      icon: 'medical'           as const, color: '#2e7d32' },
+  { label: 'Grooming',                     icon: 'cut'               as const, color: '#6a1b9a' },
+  { label: 'Minor & Major Surgeries',      icon: 'bandage'           as const, color: '#e65100' },
+  { label: 'Confinement & Emergency Care', icon: 'shield-checkmark'  as const, color: '#00838f' },
 ];
 
 const timeSlots = [
@@ -76,9 +76,7 @@ export default function BookAppointmentScreen() {
   };
 
   useFocusEffect(
-    useCallback(() => {
-      fetchUserPets();
-    }, [])
+    useCallback(() => { fetchUserPets(); }, [])
   );
 
   const fetchUserPets = async () => {
@@ -86,19 +84,17 @@ export default function BookAppointmentScreen() {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) { setIsFetchingPets(false); return; }
     const { data, error } = await (supabase as any)
-      .from('pets')
-      .select('*')
-      .eq('owner_id', user.id)
+      .from('pets').select('*').eq('owner_id', user.id)
       .order('created_at', { ascending: false });
     if (!error && data) setPets(data);
     setIsFetchingPets(false);
   };
 
   const handleBook = async () => {
-    if (!selectedPet)    { setError('Please select a pet.');    return; }
+    if (!selectedPet)     { setError('Please select a pet.');    return; }
     if (!selectedService) { setError('Please select a service.'); return; }
-    if (!selectedDate)   { setError('Please select a date.');   return; }
-    if (!selectedTime)   { setError('Please select a time.');   return; }
+    if (!selectedDate)    { setError('Please select a date.');   return; }
+    if (!selectedTime)    { setError('Please select a time.');   return; }
 
     setIsLoading(true);
     setError('');
@@ -109,6 +105,7 @@ export default function BookAppointmentScreen() {
     const { error: bookingError } = await (supabase as any)
       .from('appointments')
       .insert([{
+        client_id: user.id,
         client_name: user.user_metadata?.full_name || user.email,
         pet_name: selectedPet.name,
         pet_species: selectedPet.species,
@@ -119,7 +116,6 @@ export default function BookAppointmentScreen() {
       }]);
 
     setIsLoading(false);
-
     if (bookingError) { setError(`Failed to book: ${bookingError.message}`); return; }
 
     setSuccess(true);
@@ -131,7 +127,7 @@ export default function BookAppointmentScreen() {
 
   const availableTimeSlots = selectedService === 'Grooming' ? groomingTimeSlots : timeSlots;
 
-  /* ── Success Screen ── */
+  /* ── Success ── */
   if (success) {
     return (
       <View style={styles.successContainer}>
@@ -162,20 +158,6 @@ export default function BookAppointmentScreen() {
 
   return (
     <ScrollView style={styles.container} showsVerticalScrollIndicator={false}>
-
-      {/* ── Header ── */}
-      <View style={styles.header}>
-        <View style={styles.headerBrand}>
-          <View style={styles.crownBox}>
-            <Ionicons name="trophy" size={18} color={GOLD} />
-          </View>
-          <View>
-            <Text style={styles.headerTitle}>Book Appointment</Text>
-            <Text style={styles.headerSub}>FILL IN THE DETAILS BELOW</Text>
-          </View>
-        </View>
-      </View>
-
       <View style={styles.form}>
 
         {/* Error */}
@@ -227,7 +209,6 @@ export default function BookAppointmentScreen() {
               <Ionicons name="chevron-down" size={16} color="#8a97b0" />
             </TouchableOpacity>
 
-            {/* Pet Modal */}
             <Modal visible={showPetDropdown} transparent animationType="fade">
               <TouchableOpacity style={styles.modalOverlay} onPress={() => setShowPetDropdown(false)}>
                 <View style={styles.pickerModal}>
@@ -295,7 +276,6 @@ export default function BookAppointmentScreen() {
           <Ionicons name="chevron-down" size={16} color="#8a97b0" />
         </TouchableOpacity>
 
-        {/* Date Modal */}
         <Modal visible={showDateModal} transparent animationType="slide">
           <View style={styles.sheetOverlay}>
             <View style={styles.sheet}>
@@ -341,7 +321,6 @@ export default function BookAppointmentScreen() {
           <Ionicons name="chevron-down" size={16} color="#8a97b0" />
         </TouchableOpacity>
 
-        {/* Time Modal */}
         <Modal visible={showTimeModal} transparent animationType="slide">
           <View style={styles.sheetOverlay}>
             <View style={styles.sheet}>
@@ -392,27 +371,8 @@ export default function BookAppointmentScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: BG },
-
-  /* ── Header ── */
-  header: {
-    backgroundColor: NAV,
-    paddingHorizontal: 16,
-    paddingTop: 16,
-    paddingBottom: 14,
-  },
-  headerBrand: { flexDirection: 'row', alignItems: 'center', gap: 10 },
-  crownBox: {
-    width: 36, height: 36, borderRadius: 9,
-    backgroundColor: 'rgba(255,255,255,0.07)',
-    borderWidth: 1, borderColor: 'rgba(255,255,255,0.12)',
-    alignItems: 'center', justifyContent: 'center',
-  },
-  headerTitle: { color: '#fff', fontSize: 15, fontWeight: '700', letterSpacing: -0.2, lineHeight: 18 },
-  headerSub: { color: 'rgba(255,255,255,0.35)', fontSize: 8.5, fontWeight: '600', letterSpacing: 1.2, marginTop: 1 },
-
   form: { padding: 14 },
 
-  /* Error */
   errorBox: {
     flexDirection: 'row', alignItems: 'center', gap: 7,
     backgroundColor: '#fdecea', borderWidth: 1, borderColor: '#f5c6c0',
@@ -420,7 +380,6 @@ const styles = StyleSheet.create({
   },
   errorText: { color: '#c0392b', fontSize: 12.5, flex: 1 },
 
-  /* Hours strip */
   hoursStrip: {
     backgroundColor: NAV, borderRadius: 10,
     paddingHorizontal: 14, paddingVertical: 10,
@@ -431,10 +390,12 @@ const styles = StyleSheet.create({
   hoursText: { color: 'rgba(255,255,255,0.78)', fontSize: 10.5 },
   hoursDot: { width: 3, height: 3, borderRadius: 1.5, backgroundColor: 'rgba(255,255,255,0.2)' },
 
-  /* Label */
-  label: { fontSize: 11, fontWeight: '700', color: '#4a5568', letterSpacing: 0.9, textTransform: 'uppercase', marginBottom: 8, marginTop: 4 },
+  label: {
+    fontSize: 11, fontWeight: '700', color: '#4a5568',
+    letterSpacing: 0.9, textTransform: 'uppercase',
+    marginBottom: 8, marginTop: 4,
+  },
 
-  /* Empty pets */
   emptyPets: {
     alignItems: 'center', gap: 8,
     backgroundColor: '#fff', borderRadius: 12,
@@ -445,7 +406,6 @@ const styles = StyleSheet.create({
   addPetBtn: { backgroundColor: NAV, paddingHorizontal: 18, paddingVertical: 9, borderRadius: 8, marginTop: 4 },
   addPetBtnText: { color: '#fff', fontSize: 13, fontWeight: '700' },
 
-  /* Selector */
   selector: {
     backgroundColor: '#fff', borderWidth: 1.5, borderColor: '#dde3ef',
     borderRadius: 10, paddingHorizontal: 14, paddingVertical: 12,
@@ -457,21 +417,16 @@ const styles = StyleSheet.create({
   selectorValue: { fontSize: 14, color: NAV, fontWeight: '600' },
   selectorPlaceholder: { fontSize: 14, color: '#bcc5d8' },
 
-  /* Pet picker modal */
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'center', padding: 24 },
   pickerModal: { backgroundColor: '#fff', borderRadius: 14, padding: 16, gap: 4 },
   pickerTitle: { fontSize: 15, fontWeight: '800', color: NAV, marginBottom: 8 },
-  pickerItem: {
-    flexDirection: 'row', alignItems: 'center', gap: 10,
-    padding: 12, borderRadius: 8,
-  },
+  pickerItem: { flexDirection: 'row', alignItems: 'center', gap: 10, padding: 12, borderRadius: 8 },
   pickerItemActive: { backgroundColor: NAV },
   pickerItemName: { fontSize: 14, fontWeight: '700', color: '#1a2368' },
   pickerItemNameActive: { color: '#fff' },
   pickerItemSub: { fontSize: 11, color: '#8a97b0', marginTop: 1 },
   pickerItemSubActive: { color: GOLD },
 
-  /* Services */
   serviceGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 9, marginBottom: 12 },
   serviceCard: {
     backgroundColor: '#fff', borderRadius: 12,
@@ -486,7 +441,6 @@ const styles = StyleSheet.create({
   serviceLabel: { fontSize: 11, color: NAV, fontWeight: '600', textAlign: 'center', lineHeight: 15 },
   serviceLabelActive: { color: '#fff' },
 
-  /* Bottom sheet */
   sheetOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'flex-end' },
   sheet: {
     backgroundColor: '#fff', borderTopLeftRadius: 20, borderTopRightRadius: 20,
@@ -502,7 +456,6 @@ const styles = StyleSheet.create({
   sheetItemText: { fontSize: 13.5, color: '#1a2368', fontWeight: '500' },
   sheetItemTextActive: { color: '#fff', fontWeight: '700' },
 
-  /* Time grid */
   timeGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, paddingBottom: 4 },
   timeChip: {
     borderWidth: 1.5, borderColor: '#dde3ef',
@@ -513,7 +466,6 @@ const styles = StyleSheet.create({
   timeChipText: { fontSize: 12.5, color: '#4a5568', fontWeight: '500' },
   timeChipTextActive: { color: '#fff', fontWeight: '700' },
 
-  /* Submit */
   submitBtn: {
     backgroundColor: GOLD, borderRadius: 10,
     paddingVertical: 14, flexDirection: 'row',
@@ -522,7 +474,6 @@ const styles = StyleSheet.create({
   },
   submitBtnText: { color: NAV, fontSize: 14, fontWeight: '800' },
 
-  /* Success */
   successContainer: {
     flex: 1, alignItems: 'center', justifyContent: 'center',
     padding: 32, backgroundColor: BG,

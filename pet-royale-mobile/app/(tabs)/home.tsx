@@ -1,36 +1,21 @@
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Modal, Pressable } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity } from 'react-native';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import { useEffect, useState } from 'react';
-import { supabase } from '@/lib/supabase';
+import { useState } from 'react';
 
 const NAV = '#1a237e';
 const GOLD = '#f5c518';
 
 export default function HomeScreen() {
   const router = useRouter();
-  const [userName, setUserName] = useState('');
-  const [greeting, setGreeting] = useState('');
-  const [menuOpen, setMenuOpen] = useState(false);
-
-  useEffect(() => {
-    supabase.auth.getUser().then(({ data: { user } }) => {
-      if (user) {
-        setUserName(user.user_metadata?.full_name || user.email || 'Pet Owner');
-      }
-    });
-    const hour = new Date().getHours();
-    if (hour < 12) setGreeting('Good morning');
-    else if (hour < 18) setGreeting('Good afternoon');
-    else setGreeting('Good evening');
-  }, []);
+  const [tipIndex] = useState(() => Math.floor(Math.random() * 4));
 
   const services = [
-    { icon: 'heart' as const,           label: 'Veterinary\nCheck-ups',        color: '#e53935' },
-    { icon: 'medical' as const,          label: 'Vaccination &\nDeworming',     color: '#2e7d32' },
-    { icon: 'cut' as const,              label: 'Grooming',                      color: '#6a1b9a' },
-    { icon: 'bandage' as const,          label: 'Minor & Major\nSurgeries',     color: '#e65100' },
-    { icon: 'shield-checkmark' as const, label: 'Confinement &\nEmergency',     color: '#00838f' },
+    { icon: 'heart'             as const, label: 'Veterinary\nCheck-ups',      color: '#e53935' },
+    { icon: 'medical'           as const, label: 'Vaccination &\nDeworming',   color: '#2e7d32' },
+    { icon: 'cut'               as const, label: 'Grooming',                    color: '#6a1b9a' },
+    { icon: 'bandage'           as const, label: 'Minor & Major\nSurgeries',   color: '#e65100' },
+    { icon: 'shield-checkmark'  as const, label: 'Confinement &\nEmergency',   color: '#00838f' },
   ];
 
   const tips = [
@@ -40,79 +25,8 @@ export default function HomeScreen() {
     'Annual vaccinations protect against life-threatening diseases.',
   ];
 
-  const [tipIndex] = useState(() => Math.floor(Math.random() * tips.length));
-
-  const handleSignOut = async () => {
-    await supabase.auth.signOut();
-    router.replace('/');
-  };
-
   return (
-    <>
-      {/* ── Side Drawer ── */}
-      <Modal visible={menuOpen} transparent animationType="fade" onRequestClose={() => setMenuOpen(false)}>
-        <Pressable style={styles.drawerOverlay} onPress={() => setMenuOpen(false)}>
-          <Pressable style={styles.drawer} onPress={() => {}}>
-            {/* Drawer header */}
-            <View style={styles.drawerHeader}>
-              <View style={styles.crownBox}>
-                <Ionicons name="trophy" size={18} color={GOLD} />
-              </View>
-              <View>
-                <Text style={styles.drawerBrandName}>Pet Royale'</Text>
-                <Text style={styles.drawerBrandSub}>CLINIC & VETERINARY</Text>
-              </View>
-            </View>
-
-            <View style={styles.drawerDivider} />
-
-            {/* Menu items */}
-            {[
-              { icon: 'information-circle-outline' as const, label: 'About & Clinic Info', onPress: () => { setMenuOpen(false); router.push('/(tabs)/about' as any); } },
-              { icon: 'settings-outline'           as const, label: 'Settings', onPress: () => { setMenuOpen(false); router.push('/(tabs)/settings' as any); } },
-            ].map((item, i) => (
-              <TouchableOpacity key={i} style={styles.drawerItem} onPress={item.onPress} activeOpacity={0.7}>
-                <Ionicons name={item.icon} size={20} color={NAV} />
-                <Text style={styles.drawerItemText}>{item.label}</Text>
-                <Ionicons name="chevron-forward" size={15} color="#c8d0e4" style={{ marginLeft: 'auto' }} />
-              </TouchableOpacity>
-            ))}
-
-            <View style={styles.drawerDivider} />
-
-            <TouchableOpacity style={styles.drawerSignOut} onPress={handleSignOut} activeOpacity={0.8}>
-              <Ionicons name="log-out-outline" size={20} color="#c0392b" />
-              <Text style={styles.drawerSignOutText}>Sign Out</Text>
-            </TouchableOpacity>
-          </Pressable>
-        </Pressable>
-      </Modal>
-
-      <ScrollView style={styles.container} showsVerticalScrollIndicator={false}>
-
-      {/* ── Header ── */}
-      <View style={styles.header}>
-        <View style={styles.headerBrand}>
-          <View style={styles.crownBox}>
-            <Ionicons name="trophy" size={18} color={GOLD} />
-          </View>
-          <View>
-            <Text style={styles.brandName}>Pet Royale'</Text>
-            <Text style={styles.brandSub}>CLINIC & VETERINARY</Text>
-          </View>
-        </View>
-        <View style={styles.headerRight}>
-          <View style={styles.headerRightTop}>
-            <View>
-              <Text style={styles.greetingText}>{greeting} 👋</Text>
-              <Text style={styles.userName} numberOfLines={1}>{userName}</Text>
-            </View>
-            <TouchableOpacity style={styles.menuBtn} onPress={() => setMenuOpen(true)} activeOpacity={0.7}>
-              <Ionicons name="menu" size={22} color="#fff" />
-            </TouchableOpacity>
-          </View>
-        </View>
-      </View>
+    <ScrollView style={styles.container} showsVerticalScrollIndicator={false}>
 
       {/* ── Hero Banner ── */}
       <View style={styles.banner}>
@@ -179,86 +93,13 @@ export default function HomeScreen() {
         </View>
       </View>
 
-
-
       <View style={{ height: 24 }} />
     </ScrollView>
-    </>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#f0f2f8',
-  },
-
-  /* ── Header ── */
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    backgroundColor: NAV,
-    paddingHorizontal: 16,
-    paddingTop: 16,
-    paddingBottom: 14,
-  },
-  headerBrand: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 9,
-  },
-  crownBox: {
-    width: 36,
-    height: 36,
-    borderRadius: 9,
-    backgroundColor: 'rgba(255,255,255,0.07)',
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.12)',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  brandName: {
-    color: '#fff',
-    fontSize: 14,
-    fontWeight: '700',
-    letterSpacing: -0.2,
-    lineHeight: 17,
-  },
-  brandSub: {
-    color: 'rgba(255,255,255,0.35)',
-    fontSize: 8.5,
-    fontWeight: '600',
-    letterSpacing: 1.2,
-    marginTop: 1,
-  },
-  headerRight: {
-    alignItems: 'flex-end',
-  },
-  headerRightTop: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-  },
-  menuBtn: {
-    width: 34,
-    height: 34,
-    borderRadius: 8,
-    backgroundColor: 'rgba(255,255,255,0.1)',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  greetingText: {
-    color: 'rgba(255,255,255,0.55)',
-    fontSize: 11,
-  },
-  userName: {
-    color: GOLD,
-    fontSize: 14,
-    fontWeight: '700',
-    maxWidth: 140,
-    marginTop: 2,
-  },
+  container: { flex: 1, backgroundColor: '#f0f2f8' },
 
   /* ── Banner ── */
   banner: {
@@ -272,10 +113,8 @@ const styles = StyleSheet.create({
   },
   bannerGlow: {
     position: 'absolute',
-    bottom: -60,
-    left: -60,
-    width: 200,
-    height: 200,
+    bottom: -60, left: -60,
+    width: 200, height: 200,
     borderRadius: 100,
     backgroundColor: GOLD,
     opacity: 0.05,
@@ -349,8 +188,7 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   clinicStripDot: {
-    width: 3,
-    height: 3,
+    width: 3, height: 3,
     borderRadius: 1.5,
     backgroundColor: 'rgba(255,255,255,0.2)',
   },
@@ -367,8 +205,7 @@ const styles = StyleSheet.create({
     gap: 12,
   },
   tipIconWrap: {
-    width: 38,
-    height: 38,
+    width: 38, height: 38,
     borderRadius: 19,
     backgroundColor: 'rgba(245,197,24,0.12)',
     borderWidth: 1,
@@ -392,10 +229,7 @@ const styles = StyleSheet.create({
   },
 
   /* ── Section ── */
-  section: {
-    paddingHorizontal: 14,
-    marginTop: 20,
-  },
+  section: { paddingHorizontal: 14, marginTop: 20 },
   sectionHeader: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -409,8 +243,7 @@ const styles = StyleSheet.create({
     letterSpacing: -0.2,
   },
   sectionLine: {
-    flex: 1,
-    height: 1.5,
+    flex: 1, height: 1.5,
     backgroundColor: '#dde3ef',
     borderRadius: 2,
   },
@@ -434,8 +267,7 @@ const styles = StyleSheet.create({
     elevation: 3,
   },
   serviceIconWrap: {
-    width: 50,
-    height: 50,
+    width: 50, height: 50,
     borderRadius: 25,
     alignItems: 'center',
     justifyContent: 'center',
@@ -447,73 +279,5 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     textAlign: 'center',
     lineHeight: 15,
-  },
-
-  /* ── Drawer ── */
-  drawerOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.45)',
-    justifyContent: 'flex-end',
-    flexDirection: 'row',
-  },
-  drawer: {
-    width: '72%',
-    backgroundColor: '#fff',
-    paddingTop: 52,
-    paddingBottom: 32,
-    paddingHorizontal: 20,
-    shadowColor: '#000',
-    shadowOffset: { width: -4, height: 0 },
-    shadowOpacity: 0.15,
-    shadowRadius: 16,
-    elevation: 16,
-  },
-  drawerHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    marginBottom: 16,
-  },
-  drawerBrandName: {
-    color: NAV,
-    fontSize: 15,
-    fontWeight: '700',
-    letterSpacing: -0.2,
-    lineHeight: 17,
-  },
-  drawerBrandSub: {
-    color: '#8a97b0',
-    fontSize: 8.5,
-    fontWeight: '600',
-    letterSpacing: 1.2,
-    marginTop: 2,
-  },
-  drawerDivider: {
-    height: 1,
-    backgroundColor: '#eef1f8',
-    marginVertical: 10,
-  },
-  drawerItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-    paddingVertical: 13,
-  },
-  drawerItemText: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: NAV,
-  },
-  drawerSignOut: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-    paddingVertical: 13,
-    marginTop: 4,
-  },
-  drawerSignOutText: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#c0392b',
   },
 });

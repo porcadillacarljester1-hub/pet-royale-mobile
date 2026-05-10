@@ -1,5 +1,5 @@
 import { useState, useCallback } from 'react';
-import { View, Text, StyleSheet, ScrollView, ActivityIndicator, TouchableOpacity, RefreshControl } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, ActivityIndicator, TouchableOpacity, RefreshControl, Alert } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { supabase } from '@/lib/supabase';
 import { useFocusEffect } from 'expo-router';
@@ -20,7 +20,7 @@ export default function MyAppointmentsScreen() {
     const { data, error } = await (supabase as any)
       .from('appointments')
       .select('*')
-      .eq('client_name', user.user_metadata?.full_name || user.email)
+      .eq('client_id', user.id.toString())
       .order('created_at', { ascending: false });
 
     if (!error) setAppointments(data || []);
@@ -28,6 +28,32 @@ export default function MyAppointmentsScreen() {
     setRefreshing(false);
   };
 
+  const handleCancelAppointment = (appointmentId: string) => {
+    Alert.alert('Cancel Appointment', 'Are you sure you want to cancel this appointment?', [
+      { text: 'Keep It', style: 'cancel' },
+      {
+        text: 'Cancel Appointment',
+        style: 'destructive',
+        onPress: async () => {
+          const { error } = await (supabase as any)
+            .from('appointments')
+            .delete()
+            .eq('id', appointmentId);
+
+          if (!error) {
+            Alert.alert('Cancelled', 'Appointment has been deleted.');
+            fetchAppointments();
+          } else {
+            Alert.alert('Error', 'Failed to cancel appointment.');
+          }
+        },
+      },
+    ]);
+  };
+
+  // Refetch whenever the screen comes into focus.
+  // No separate realtime listener needed here — _layout.tsx handles
+  // push notifications globally for confirmed/completed status changes.
   useFocusEffect(
     useCallback(() => {
       fetchAppointments();
@@ -54,13 +80,13 @@ export default function MyAppointmentsScreen() {
   const AppointmentCard = ({ item }: { item: any }) => {
     const status = getStatus(item.status);
     const isCompleted = item.status === 'completed';
+    const canCancel = item.status === 'incoming';
+
     return (
       <View style={[styles.card, isCompleted && styles.cardCompleted]}>
-        {/* Left accent bar */}
         <View style={[styles.cardAccent, { backgroundColor: status.color }]} />
 
         <View style={styles.cardBody}>
-          {/* Top row */}
           <View style={styles.cardTop}>
             <View style={[styles.statusBadge, { backgroundColor: status.bg }]}>
               <Ionicons name={status.icon} size={12} color={status.color} />
@@ -69,10 +95,8 @@ export default function MyAppointmentsScreen() {
             <Text style={styles.dateText}>{item.requested_date}</Text>
           </View>
 
-          {/* Service */}
           <Text style={styles.serviceName}>{item.service}</Text>
 
-          {/* Pet */}
           <View style={styles.petRow}>
             <View style={styles.petIconWrap}>
               <Ionicons name="paw" size={12} color={NAV} />
@@ -83,12 +107,21 @@ export default function MyAppointmentsScreen() {
             </Text>
           </View>
 
-          {/* Time */}
           {item.scheduled_time && (
             <View style={styles.timeRow}>
               <Ionicons name="time-outline" size={13} color="#8a97b0" />
               <Text style={styles.timeText}>{item.scheduled_time}</Text>
             </View>
+          )}
+
+          {canCancel && (
+            <TouchableOpacity
+              style={styles.cancelBtn}
+              onPress={() => handleCancelAppointment(item.id)}
+            >
+              <Ionicons name="close-circle-outline" size={14} color="#fff" />
+              <Text style={styles.cancelBtnText}>Cancel Appointment</Text>
+            </TouchableOpacity>
           )}
         </View>
       </View>
@@ -97,8 +130,6 @@ export default function MyAppointmentsScreen() {
 
   return (
     <View style={styles.container}>
-
-      {/* ── Header ── */}
       <View style={styles.header}>
         <View style={styles.headerBrand}>
           <View style={styles.crownBox}>
@@ -165,7 +196,6 @@ export default function MyAppointmentsScreen() {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: BG },
 
-  /* ── Header ── */
   header: {
     backgroundColor: NAV,
     paddingHorizontal: 16,
@@ -185,10 +215,7 @@ const styles = StyleSheet.create({
   scroll: { flex: 1 },
   scrollContent: { padding: 14 },
 
-  /* ── Empty ── */
-  empty: {
-    alignItems: 'center', paddingTop: 60, gap: 10,
-  },
+  empty: { alignItems: 'center', paddingTop: 60, gap: 10 },
   emptyIconWrap: {
     width: 72, height: 72, borderRadius: 36,
     backgroundColor: NAV, alignItems: 'center', justifyContent: 'center',
@@ -197,7 +224,6 @@ const styles = StyleSheet.create({
   emptyTitle: { fontSize: 17, fontWeight: '800', color: NAV, letterSpacing: -0.2 },
   emptyText: { fontSize: 13, color: '#8a97b0', textAlign: 'center' },
 
-  /* ── Section header ── */
   sectionHeader: {
     flexDirection: 'row', alignItems: 'center',
     gap: 8, marginBottom: 10, marginTop: 6,
@@ -212,7 +238,6 @@ const styles = StyleSheet.create({
   sectionBadgeTextMuted: { color: '#8a97b0' },
   sectionLine: { flex: 1, height: 1.5, backgroundColor: '#dde3ef', borderRadius: 2 },
 
-  /* ── Card ── */
   card: {
     backgroundColor: '#fff', borderRadius: 12,
     marginBottom: 10, flexDirection: 'row',
@@ -252,4 +277,21 @@ const styles = StyleSheet.create({
 
   timeRow: { flexDirection: 'row', alignItems: 'center', gap: 5 },
   timeText: { fontSize: 12, color: '#8a97b0' },
+
+  cancelBtn: {
+    backgroundColor: '#c0392b',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 8,
+    marginTop: 10,
+  },
+  cancelBtnText: {
+    color: '#fff',
+    fontSize: 12,
+    fontWeight: '600',
+  },
 });
