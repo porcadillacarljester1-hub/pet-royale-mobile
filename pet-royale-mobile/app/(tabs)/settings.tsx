@@ -1,193 +1,248 @@
-import { View, Text, StyleSheet, TouchableOpacity, Switch } from 'react-native';
+import { useState, useEffect } from 'react';
+import { View, Text, StyleSheet, TouchableOpacity, Switch, ScrollView, Alert, Linking } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { useState } from 'react';
 import { useRouter } from 'expo-router';
-import { supabase } from '@/lib/supabase';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import Constants from 'expo-constants';
 
-const NAV = '#1a237e';
-const GOLD = '#f5c518';
+const TEAL = '#0D9488';
+const TEAL_LIGHT = '#CCFBF1';
+const BORDER = '#E5E7EB';
+const SUB = '#6B7280';
+const INK = '#111827';
+const BG = '#F4F7FB';
+
+const NOTIF_KEY = '@pet_royale_push_enabled';
+const UNIT_KEY = '@pet_royale_weight_unit';
 
 export default function SettingsScreen() {
   const router = useRouter();
-  const [notifications, setNotifications] = useState(true);
+  const insets = useSafeAreaInsets();
 
-  const handleSignOut = async () => {
-    await supabase.auth.signOut();
-    router.replace('/signIn');
+  const [pushEnabled, setPushEnabled] = useState(true);
+  const [emailUpdates, setEmailUpdates] = useState(true);
+  const [weightUnit, setWeightUnit] = useState<'kg' | 'lbs'>('kg');
+  const [loaded, setLoaded] = useState(false);
+
+  useEffect(() => {
+    loadPreferences();
+  }, []);
+
+  const loadPreferences = async () => {
+    try {
+      const push = await AsyncStorage.getItem(NOTIF_KEY);
+      const unit = await AsyncStorage.getItem(UNIT_KEY);
+      if (push !== null) setPushEnabled(push === 'true');
+      if (unit === 'lbs' || unit === 'kg') setWeightUnit(unit);
+    } finally {
+      setLoaded(true);
+    }
   };
+
+  const togglePush = async (value: boolean) => {
+    setPushEnabled(value);
+    await AsyncStorage.setItem(NOTIF_KEY, String(value));
+  };
+
+  const toggleUnit = async () => {
+    const next = weightUnit === 'kg' ? 'lbs' : 'kg';
+    setWeightUnit(next);
+    await AsyncStorage.setItem(UNIT_KEY, next);
+  };
+
+  const handleClearCache = () => {
+    Alert.alert(
+      'Clear Local Data',
+      'This clears saved preferences on this device only — your account, pets, and appointments are safe and stored online.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Clear',
+          style: 'destructive',
+          onPress: async () => {
+            await AsyncStorage.multiRemove([NOTIF_KEY, UNIT_KEY]);
+            setPushEnabled(true);
+            setWeightUnit('kg');
+            Alert.alert('Done', 'Local preferences have been reset.');
+          },
+        },
+      ]
+    );
+  };
+
+  const appVersion = Constants.expoConfig?.version || '1.0.0';
+
+  if (!loaded) return null;
 
   return (
     <View style={styles.container}>
-
-      {/* Header */}
-      <View style={styles.header}>
-        <View style={styles.headerBrand}>
-          <View style={styles.crownBox}>
-            <Ionicons name="trophy" size={18} color={GOLD} />
-          </View>
-          <View>
-            <Text style={styles.brandName}>Settings</Text>
-            <Text style={styles.brandSub}>PET ROYALE' CLINIC</Text>
-          </View>
-        </View>
-      </View>
-
-      {/* Settings List */}
-      <View style={styles.group}>
-        <Text style={styles.groupLabel}>PREFERENCES</Text>
-
-        <View style={styles.row}>
-          <View style={styles.rowLeft}>
-            <View style={styles.rowIcon}>
-              <Ionicons name="notifications-outline" size={18} color={GOLD} />
-            </View>
-            <Text style={styles.rowText}>Push Notifications</Text>
-          </View>
-          <Switch
-            value={notifications}
-            onValueChange={setNotifications}
-            trackColor={{ false: '#dde3ef', true: NAV }}
-            thumbColor={notifications ? GOLD : '#fff'}
-          />
-        </View>
-      </View>
-
-      <View style={styles.group}>
-        <Text style={styles.groupLabel}>ACCOUNT</Text>
-
-        {[
-          { icon: 'person-outline' as const,      label: 'Edit Profile',    onPress: () => router.push('/(tabs)/profile' as any) },
-          { icon: 'lock-closed-outline' as const,  label: 'Change Password', onPress: () => {} },
-          { icon: 'shield-outline' as const,       label: 'Privacy Policy',  onPress: () => {} },
-          { icon: 'information-circle-outline' as const, label: 'About App', onPress: () => router.push('/(tabs)/about' as any) },
-        ].map((item, i) => (
-          <TouchableOpacity key={i} style={styles.row} onPress={item.onPress} activeOpacity={0.7}>
-            <View style={styles.rowLeft}>
-              <View style={styles.rowIcon}>
-                <Ionicons name={item.icon} size={18} color={GOLD} />
-              </View>
-              <Text style={styles.rowText}>{item.label}</Text>
-            </View>
-            <Ionicons name="chevron-forward" size={16} color="#c8d0e4" />
-          </TouchableOpacity>
-        ))}
-      </View>
-
-      <View style={styles.group}>
-        <TouchableOpacity style={styles.signOutRow} onPress={handleSignOut} activeOpacity={0.8}>
-          <View style={[styles.rowIcon, { backgroundColor: '#fdecea' }]}>
-            <Ionicons name="log-out-outline" size={18} color="#c0392b" />
-          </View>
-          <Text style={styles.signOutText}>Sign Out</Text>
+      <View style={[styles.header, { paddingTop: insets.top + 8 }]}>
+        <TouchableOpacity style={styles.backBtn} onPress={() => router.back()} activeOpacity={0.7}>
+          <Ionicons name="chevron-back" size={22} color={INK} />
         </TouchableOpacity>
+        <Text style={styles.headerTitle}>App Settings</Text>
+        <View style={{ width: 36 }} />
       </View>
 
+      <ScrollView showsVerticalScrollIndicator={false}>
+        <View style={styles.content}>
+          {/* ── Notifications ── */}
+          <Text style={styles.sectionTitle}>Notifications</Text>
+          <View style={styles.card}>
+            <View style={styles.row}>
+              <View style={styles.rowLeft}>
+                <View style={styles.rowIconWrap}>
+                  <Ionicons name="notifications-outline" size={17} color={TEAL} />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.rowLabel}>Push Notifications</Text>
+                  <Text style={styles.rowSub}>Appointment reminders & updates</Text>
+                </View>
+              </View>
+              <Switch
+                value={pushEnabled}
+                onValueChange={togglePush}
+                trackColor={{ false: BORDER, true: TEAL_LIGHT }}
+                thumbColor={pushEnabled ? TEAL : '#fff'}
+              />
+            </View>
+
+            <View style={styles.divider} />
+
+            <View style={styles.row}>
+              <View style={styles.rowLeft}>
+                <View style={styles.rowIconWrap}>
+                  <Ionicons name="mail-outline" size={17} color={TEAL} />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.rowLabel}>Email Updates</Text>
+                  <Text style={styles.rowSub}>Clinic news and promotions</Text>
+                </View>
+              </View>
+              <Switch
+                value={emailUpdates}
+                onValueChange={setEmailUpdates}
+                trackColor={{ false: BORDER, true: TEAL_LIGHT }}
+                thumbColor={emailUpdates ? TEAL : '#fff'}
+              />
+            </View>
+          </View>
+
+          {/* ── Preferences ── */}
+          <Text style={styles.sectionTitle}>Preferences</Text>
+          <View style={styles.card}>
+            <TouchableOpacity style={styles.row} onPress={toggleUnit} activeOpacity={0.7}>
+              <View style={styles.rowLeft}>
+                <View style={styles.rowIconWrap}>
+                  <Ionicons name="scale-outline" size={17} color={TEAL} />
+                </View>
+                <Text style={styles.rowLabel}>Weight Unit</Text>
+              </View>
+              <View style={styles.unitToggle}>
+                <Text style={styles.unitToggleText}>{weightUnit === 'kg' ? 'Kilograms' : 'Pounds'}</Text>
+                <Ionicons name="swap-horizontal" size={15} color={TEAL} />
+              </View>
+            </TouchableOpacity>
+          </View>
+
+          {/* ── Storage ── */}
+          <Text style={styles.sectionTitle}>Storage</Text>
+          <View style={styles.card}>
+            <TouchableOpacity style={styles.row} onPress={handleClearCache} activeOpacity={0.7}>
+              <View style={styles.rowLeft}>
+                <View style={styles.rowIconWrap}>
+                  <Ionicons name="trash-outline" size={17} color={TEAL} />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.rowLabel}>Clear Local Data</Text>
+                  <Text style={styles.rowSub}>Reset saved preferences on this device</Text>
+                </View>
+              </View>
+              <Ionicons name="chevron-forward" size={16} color="#D1D5DB" />
+            </TouchableOpacity>
+          </View>
+
+          {/* ── App Info ── */}
+          <Text style={styles.sectionTitle}>App Info</Text>
+          <View style={styles.card}>
+            <TouchableOpacity
+              style={styles.row}
+              onPress={() => router.push('/(tabs)/about' as any)}
+              activeOpacity={0.7}
+            >
+              <View style={styles.rowLeft}>
+                <View style={styles.rowIconWrap}>
+                  <Ionicons name="document-text-outline" size={17} color={TEAL} />
+                </View>
+                <Text style={styles.rowLabel}>Privacy Policy</Text>
+              </View>
+              <Ionicons name="chevron-forward" size={16} color="#D1D5DB" />
+            </TouchableOpacity>
+
+            <View style={styles.divider} />
+
+            <View style={styles.row}>
+              <View style={styles.rowLeft}>
+                <View style={styles.rowIconWrap}>
+                  <Ionicons name="phone-portrait-outline" size={17} color={TEAL} />
+                </View>
+                <Text style={styles.rowLabel}>App Version</Text>
+              </View>
+              <Text style={styles.versionText}>{appVersion}</Text>
+            </View>
+          </View>
+
+          <View style={{ height: 32 }} />
+        </View>
+      </ScrollView>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#f0f2f8',
-  },
+  container: { flex: 1, backgroundColor: BG },
+
   header: {
-    backgroundColor: NAV,
-    paddingHorizontal: 16,
-    paddingTop: 16,
-    paddingBottom: 14,
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    backgroundColor: '#fff',
+    paddingHorizontal: 12, paddingBottom: 14,
+    borderBottomWidth: 1, borderBottomColor: BORDER,
   },
-  headerBrand: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 9,
+  backBtn: {
+    width: 36, height: 36, borderRadius: 18,
+    backgroundColor: BG, alignItems: 'center', justifyContent: 'center',
   },
-  crownBox: {
-    width: 36,
-    height: 36,
-    borderRadius: 9,
-    backgroundColor: 'rgba(255,255,255,0.07)',
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.12)',
-    alignItems: 'center',
-    justifyContent: 'center',
+  headerTitle: { fontSize: 16, fontWeight: '800', color: INK },
+
+  content: { padding: 16 },
+
+  sectionTitle: {
+    fontSize: 12.5, fontWeight: '800', color: SUB,
+    letterSpacing: 0.5, textTransform: 'uppercase',
+    marginBottom: 8, marginTop: 18,
   },
-  brandName: {
-    color: '#fff',
-    fontSize: 14,
-    fontWeight: '700',
-    letterSpacing: -0.2,
-    lineHeight: 17,
-  },
-  brandSub: {
-    color: 'rgba(255,255,255,0.35)',
-    fontSize: 8.5,
-    fontWeight: '600',
-    letterSpacing: 1.2,
-    marginTop: 1,
-  },
-  group: {
-    marginTop: 20,
-    paddingHorizontal: 14,
-  },
-  groupLabel: {
-    fontSize: 10,
-    fontWeight: '700',
-    color: '#8a97b0',
-    letterSpacing: 1.3,
-    marginBottom: 8,
-    marginLeft: 2,
+
+  card: {
+    backgroundColor: '#fff', borderRadius: 14,
+    shadowColor: '#000', shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.04, shadowRadius: 5, elevation: 1,
   },
   row: {
-    backgroundColor: '#fff',
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 14,
-    paddingVertical: 13,
-    borderRadius: 12,
-    marginBottom: 8,
-    shadowColor: NAV,
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.05,
-    shadowRadius: 4,
-    elevation: 2,
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    paddingHorizontal: 14, paddingVertical: 13,
   },
-  rowLeft: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
+  rowLeft: { flexDirection: 'row', alignItems: 'center', gap: 12, flex: 1 },
+  rowIconWrap: {
+    width: 32, height: 32, borderRadius: 10,
+    backgroundColor: TEAL_LIGHT, alignItems: 'center', justifyContent: 'center',
   },
-  rowIcon: {
-    width: 34,
-    height: 34,
-    borderRadius: 9,
-    backgroundColor: NAV,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  rowText: {
-    fontSize: 13.5,
-    fontWeight: '600',
-    color: NAV,
-  },
-  signOutRow: {
-    backgroundColor: '#fff',
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-    paddingHorizontal: 14,
-    paddingVertical: 13,
-    borderRadius: 12,
-    shadowColor: NAV,
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.05,
-    shadowRadius: 4,
-    elevation: 2,
-  },
-  signOutText: {
-    fontSize: 13.5,
-    fontWeight: '600',
-    color: '#c0392b',
-  },
+  rowLabel: { fontSize: 13.5, fontWeight: '600', color: INK },
+  rowSub: { fontSize: 11, color: SUB, marginTop: 2 },
+  divider: { height: 1, backgroundColor: BORDER, marginLeft: 58 },
+
+  unitToggle: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  unitToggleText: { fontSize: 12.5, color: TEAL, fontWeight: '700' },
+
+  versionText: { fontSize: 12.5, color: SUB, fontWeight: '600' },
 });

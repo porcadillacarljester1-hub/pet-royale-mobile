@@ -80,7 +80,7 @@ export default function ServicesScreen() {
             Our{' '}
             <Text style={styles.headerTitleItalic}>Services</Text>
           </Text>
-          <Text style={styles.headerSub}>Pet Royale' Clinic & Veterinary</Text>
+          <Text style={styles.headerSub}>Pet Royale` Clinic & Veterinary</Text>
         </View>
 
         {/* Crown badge */}

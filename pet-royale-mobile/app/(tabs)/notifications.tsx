@@ -1,136 +1,110 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import {
-  View, Text, StyleSheet, FlatList, TouchableOpacity,
-  ActivityIndicator, RefreshControl, Alert, Animated, PanResponder, Dimensions,
+  View, Text, StyleSheet, ScrollView, TouchableOpacity,
+  ActivityIndicator, RefreshControl, Alert,
+  Modal, Linking,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { supabase } from '@/lib/supabase';
-import { useFocusEffect } from 'expo-router';
+import { useFocusEffect, useRouter } from 'expo-router';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import {
+  type AppNotification,
+  getActionsForCategory,
+  markNotificationRead,
+  deleteNotification,
+  cancelAppointment,
+  fetchAppointmentById,
+  fetchMedicationById,
+  markMedicationGiven,
+  snoozeReminder,
+  dismissReminder,
+} from '@/lib/notificationActions';
 
-const NAV = '#1a237e';
-const GOLD = '#f5c518';
-const BG = '#f0f2f8';
-const SCREEN_WIDTH = Dimensions.get('window').width;
-const SWIPE_THRESHOLD = 60;
-const ACTION_WIDTH = 140; // total width of revealed actions
+const TEAL = '#0D9488';
+const TEAL_LIGHT = '#CCFBF1';
+const ORANGE = '#F97316';
+const ORANGE_LIGHT = '#FFEDD5';
+const PURPLE = '#7C3AED';
+const PURPLE_LIGHT = '#EDE9FE';
+const BLUE = '#2563EB';
+const BLUE_LIGHT = '#DBEAFE';
+const GOLD = '#D97706';
+const GOLD_LIGHT = '#FEF3C7';
+const BORDER = '#E5E7EB';
+const SUB = '#6B7280';
+const INK = '#111827';
+const BG = '#F4F7FB';
 
 const ADMIN_ONLY_TITLES = ['New Appointment Request'];
+const CLINIC_ADDRESS = 'Calbayog City, Eastern Samar, Philippines';
 
-// ── Swipeable Row ──────────────────────────────────────────────────────────────
-function SwipeableRow({
-  children,
-  onMarkRead,
-  onDelete,
-  isRead,
-}: {
-  children: React.ReactNode;
-  onMarkRead: () => void;
-  onDelete: () => void;
-  isRead: boolean;
-}) {
-  const translateX = useRef(new Animated.Value(0)).current;
-  const isOpen = useRef(false);
+type FilterKey = 'all' | 'reminders' | 'appointments' | 'updates';
 
-  const open = () => {
-    Animated.spring(translateX, {
-      toValue: -ACTION_WIDTH,
-      useNativeDriver: true,
-      tension: 80,
-      friction: 12,
-    }).start();
-    isOpen.current = true;
-  };
-
-  const close = () => {
-    Animated.spring(translateX, {
-      toValue: 0,
-      useNativeDriver: true,
-      tension: 80,
-      friction: 12,
-    }).start();
-    isOpen.current = false;
-  };
-
-  const panResponder = useRef(
-    PanResponder.create({
-      onMoveShouldSetPanResponder: (_, g) =>
-        Math.abs(g.dx) > 5 && Math.abs(g.dx) > Math.abs(g.dy),
-      onPanResponderMove: (_, g) => {
-        const base = isOpen.current ? -ACTION_WIDTH : 0;
-        const next = base + g.dx;
-        if (next <= 0 && next >= -ACTION_WIDTH) {
-          translateX.setValue(next);
-        }
-      },
-      onPanResponderRelease: (_, g) => {
-        const base = isOpen.current ? -ACTION_WIDTH : 0;
-        const next = base + g.dx;
-        if (next < -SWIPE_THRESHOLD) {
-          open();
-        } else {
-          close();
-        }
-      },
-    })
-  ).current;
-
-  return (
-    <View style={{ overflow: 'hidden' }}>
-      {/* Action buttons revealed behind */}
-      <View style={styles.actions}>
-        {!isRead && (
-          <TouchableOpacity
-            style={[styles.actionBtn, styles.actionRead]}
-            onPress={() => { close(); onMarkRead(); }}
-          >
-            <Ionicons name="checkmark-done" size={20} color="#fff" />
-            <Text style={styles.actionText}>Mark{'\n'}Read</Text>
-          </TouchableOpacity>
-        )}
-        <TouchableOpacity
-          style={[styles.actionBtn, styles.actionDelete, isRead && { width: ACTION_WIDTH }]}
-          onPress={() => { close(); onDelete(); }}
-        >
-          <Ionicons name="trash" size={20} color="#fff" />
-          <Text style={styles.actionText}>Delete</Text>
-        </TouchableOpacity>
-      </View>
-
-      {/* Sliding foreground */}
-      <Animated.View
-        style={{ transform: [{ translateX }] }}
-        {...panResponder.panHandlers}
-      >
-        {children}
-      </Animated.View>
-    </View>
-  );
+function getFilterGroup(category: string | null): FilterKey {
+  if (category === 'appointment_upcoming' || category === 'appointment_confirmed') return 'appointments';
+  if (category === 'medication_reminder' || category === 'grooming_reminder' || category === 'vaccination_due' || category === 'stock_reminder') return 'reminders';
+  return 'updates';
 }
 
-// ── Main Screen ────────────────────────────────────────────────────────────────
+function getCategoryVisual(category: string | null, type: string) {
+  switch (category) {
+    case 'appointment_upcoming': return { icon: 'notifications' as const, bg: ORANGE_LIGHT, fg: ORANGE };
+    case 'appointment_confirmed': return { icon: 'checkmark-circle' as const, bg: BLUE_LIGHT, fg: BLUE };
+    case 'medication_reminder': return { icon: 'medical' as const, bg: TEAL_LIGHT, fg: TEAL };
+    case 'grooming_reminder': return { icon: 'cut' as const, bg: PURPLE_LIGHT, fg: PURPLE };
+    case 'stock_reminder': return { icon: 'bag-handle' as const, bg: TEAL_LIGHT, fg: TEAL };
+    case 'vaccination_due': return { icon: 'shield-checkmark' as const, bg: GOLD_LIGHT, fg: GOLD };
+    default:
+      if (type === 'appointment') return { icon: 'calendar' as const, bg: TEAL_LIGHT, fg: TEAL };
+      if (type === 'inventory') return { icon: 'cube' as const, bg: ORANGE_LIGHT, fg: ORANGE };
+      if (type === 'client') return { icon: 'person' as const, bg: PURPLE_LIGHT, fg: PURPLE };
+      return { icon: 'notifications' as const, bg: '#F3F4F6', fg: SUB };
+  }
+}
+
+function getDateGroupLabel(dateStr: string): string {
+  const date = new Date(dateStr);
+  const now = new Date();
+  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const startOfDate = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+  const diffDays = Math.round((startOfToday.getTime() - startOfDate.getTime()) / 86400000);
+
+  if (diffDays === 0) return 'Today';
+  if (diffDays === 1) return 'Yesterday';
+  if (diffDays <= 7) return 'This Week';
+  return 'Earlier';
+}
+
+const GROUP_ORDER = ['Today', 'Yesterday', 'This Week', 'Earlier'];
+
 export default function NotificationsScreen() {
-  const [notifications, setNotifications] = useState<any[]>([]);
+  const router = useRouter();
+  const insets = useSafeAreaInsets();
+
+  const [notifications, setNotifications] = useState<AppNotification[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [filter, setFilter] = useState<'all' | 'unread'>('all');
+  const [filter, setFilter] = useState<FilterKey>('all');
+
+  const [selected, setSelected] = useState<AppNotification | null>(null);
+  const [detailData, setDetailData] = useState<any>(null);
+  const [loadingDetail, setLoadingDetail] = useState(false);
+  const [actionLoading, setActionLoading] = useState<string | null>(null);
 
   const fetchNotifications = async () => {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) return;
 
-    const clientName = user.user_metadata?.full_name || user.email;
-
     const { data } = await (supabase as any)
       .from('notifications')
       .select('*')
-      .or(`message.ilike.%${clientName}%,type.eq.general`)
+      .or(`client_user_id.eq.${user.id},type.eq.general`)
       .order('created_at', { ascending: false })
       .limit(50);
 
     if (data) {
-      setNotifications(
-        data.filter((n: any) => !ADMIN_ONLY_TITLES.includes(n.title))
-      );
+      setNotifications(data.filter((n: any) => !ADMIN_ONLY_TITLES.includes(n.title)));
     }
     setIsLoading(false);
     setRefreshing(false);
@@ -141,23 +115,14 @@ export default function NotificationsScreen() {
   useEffect(() => {
     const channel = (supabase as any)
       .channel('notifications-screen')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'notifications' },
-        () => fetchNotifications()
-      )
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'notifications' }, () => fetchNotifications())
       .subscribe();
     return () => { supabase.removeChannel(channel); };
   }, []);
 
   const handleMarkAsRead = async (id: string) => {
-    await (supabase as any).from('notifications').update({ is_read: true }).eq('id', id);
+    await markNotificationRead(id);
     setNotifications(prev => prev.map(n => n.id === id ? { ...n, is_read: true } : n));
-  };
-
-  const handleMarkAllAsRead = async () => {
-    const unreadIds = notifications.filter(n => !n.is_read).map(n => n.id);
-    if (!unreadIds.length) return;
-    await (supabase as any).from('notifications').update({ is_read: true }).in('id', unreadIds);
-    setNotifications(prev => prev.map(n => ({ ...n, is_read: true })));
   };
 
   const handleDelete = (id: string) => {
@@ -166,155 +131,384 @@ export default function NotificationsScreen() {
       {
         text: 'Delete', style: 'destructive',
         onPress: async () => {
-          await (supabase as any).from('notifications').delete().eq('id', id);
+          await deleteNotification(id);
           setNotifications(prev => prev.filter(n => n.id !== id));
         },
       },
     ]);
   };
 
-  const getTypeIcon = (type: string): any => {
-    switch (type) {
-      case 'appointment': return 'calendar';
-      case 'inventory':   return 'cube';
-      case 'client':      return 'person';
-      default:            return 'notifications';
-    }
-  };
-
-  const getTypeColor = (type: string) => {
-    switch (type) {
-      case 'appointment': return NAV;
-      case 'inventory':   return '#e65100';
-      case 'client':      return '#2e7d32';
-      default:            return '#6b7280';
-    }
-  };
-
-  const formatTime = (dateStr: string) => {
+  const formatItemTime = (dateStr: string, group: string) => {
     const date = new Date(dateStr);
-    const now = new Date();
-    const diff = now.getTime() - date.getTime();
-    const minutes = Math.floor(diff / 60000);
-    const hours   = Math.floor(diff / 3600000);
-    const days    = Math.floor(diff / 86400000);
-    if (minutes < 1)  return 'Just now';
-    if (minutes < 60) return `${minutes}m ago`;
-    if (hours < 24)   return `${hours}h ago`;
-    if (days === 1)   return 'Yesterday';
-    return `${days}d ago`;
+    const time = date.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+    if (group === 'Today') return time;
+    if (group === 'Yesterday') return `Yesterday, ${time}`;
+    return `${date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}, ${time}`;
   };
 
-  const unreadCount = notifications.filter(n => !n.is_read).length;
-  const displayed   = filter === 'unread'
-    ? notifications.filter(n => !n.is_read)
-    : notifications;
+  // ── Open detail sheet, load whatever related record it needs ──
+  const openDetail = async (n: AppNotification) => {
+    setSelected(n);
+    setDetailData(null);
+    if (!n.is_read) handleMarkAsRead(n.id);
 
-  const renderItem = ({ item }: { item: any }) => {
-    const color    = getTypeColor(item.type);
-    const isUnread = !item.is_read;
+    if (!n.related_type || !n.related_id) return;
 
-    return (
-      <SwipeableRow
-        isRead={item.is_read}
-        onMarkRead={() => handleMarkAsRead(item.id)}
-        onDelete={() => handleDelete(item.id)}
-      >
-        <TouchableOpacity
-          style={[styles.item, isUnread && styles.itemUnread]}
-          onPress={() => isUnread && handleMarkAsRead(item.id)}
-          activeOpacity={0.75}
-        >
-          {/* Icon bubble */}
-          <View style={[styles.iconBubble, { backgroundColor: color }]}>
-            <Ionicons name={getTypeIcon(item.type)} size={20} color="#fff" />
-          </View>
-
-          {/* Content */}
-          <View style={styles.itemBody}>
-            <View style={styles.itemTop}>
-              <Text style={[styles.itemTitle, isUnread && styles.itemTitleUnread]} numberOfLines={1}>
-                {item.title}
-              </Text>
-              <Text style={styles.itemTime}>{formatTime(item.created_at)}</Text>
-            </View>
-            <Text style={styles.itemMessage} numberOfLines={2}>{item.message}</Text>
-          </View>
-
-          {/* Unread dot */}
-          {isUnread && <View style={styles.unreadDot} />}
-        </TouchableOpacity>
-      </SwipeableRow>
-    );
+    setLoadingDetail(true);
+    try {
+      if (n.related_type === 'appointment') {
+        setDetailData(await fetchAppointmentById(n.related_id));
+      } else if (n.related_type === 'medication') {
+        setDetailData(await fetchMedicationById(n.related_id));
+      } else if (n.related_type === 'reminder') {
+        setDetailData({ id: n.related_id });
+      } else if (n.related_type === 'pet') {
+        const { data } = await (supabase as any).from('pets').select('*').eq('id', n.related_id).single();
+        setDetailData(data);
+      } else if (n.related_type === 'vaccination') {
+        const { data } = await (supabase as any).from('pet_vaccinations').select('*, pets(name)').eq('id', n.related_id).single();
+        setDetailData(data);
+      }
+    } catch {
+      setDetailData(null);
+    } finally {
+      setLoadingDetail(false);
+    }
   };
+
+  const closeDetail = () => {
+    setSelected(null);
+    setDetailData(null);
+  };
+
+  // ── Handle each action key — real behavior per action ──
+  const handleAction = async (actionKey: string) => {
+    if (!selected) return;
+    setActionLoading(actionKey);
+    try {
+      switch (actionKey) {
+        case 'view_appointment':
+          closeDetail();
+          router.push('/(tabs)/appointments' as any);
+          break;
+
+        case 'cancel':
+          if (selected.related_id) {
+            Alert.alert('Cancel Appointment', 'Are you sure you want to cancel this appointment?', [
+              { text: 'Keep It', style: 'cancel' },
+              {
+                text: 'Cancel Appointment', style: 'destructive',
+                onPress: async () => {
+                  await cancelAppointment(selected.related_id!);
+                  closeDetail();
+                  Alert.alert('Cancelled', 'Your appointment has been cancelled.');
+                },
+              },
+            ]);
+          }
+          break;
+
+        case 'reschedule':
+          if (selected.related_id) {
+            closeDetail();
+            router.push({ pathname: '/(tabs)/appointments', params: { reschedule: '1', appointmentId: selected.related_id } } as any);
+          }
+          break;
+
+        case 'directions':
+          Linking.openURL(`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(CLINIC_ADDRESS)}`);
+          break;
+
+        case 'mark_given':
+          if (selected.related_id) {
+            await markMedicationGiven(selected.related_id);
+            closeDetail();
+            Alert.alert('Logged', 'Dose marked as given.');
+          }
+          break;
+
+        case 'snooze':
+          if (selected.related_id) {
+            await snoozeReminder(selected.related_id, 24);
+            closeDetail();
+            Alert.alert('Snoozed', "We'll remind you again in 24 hours.");
+          }
+          break;
+
+        case 'dismiss':
+          if (selected.related_id) {
+            await dismissReminder(selected.related_id);
+          }
+          closeDetail();
+          break;
+
+        case 'view_pet': {
+          const petId = detailData?.pet_id || detailData?.id || selected.related_id;
+          closeDetail();
+          if (petId) router.push({ pathname: '/pet-detail', params: { id: petId } } as any);
+          break;
+        }
+
+        case 'view_vaccination': {
+          const petId = detailData?.pet_id;
+          closeDetail();
+          if (petId) router.push({ pathname: '/pet-detail', params: { id: petId } } as any);
+          break;
+        }
+
+        case 'book_grooming':
+          closeDetail();
+          router.push({ pathname: '/(tabs)/appointments', params: { openBooking: '1', service: 'Grooming' } } as any);
+          break;
+
+        case 'book_appointment':
+          closeDetail();
+          router.push({ pathname: '/(tabs)/appointments', params: { openBooking: '1' } } as any);
+          break;
+
+        case 'shop':
+          closeDetail();
+          router.push('/(tabs)/products' as any);
+          break;
+      }
+    } catch {
+      Alert.alert('Error', 'Something went wrong. Please try again.');
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
+  const filtered = filter === 'all' ? notifications : notifications.filter(n => getFilterGroup(n.category) === filter);
+
+  // Group filtered notifications by date bucket, preserving GROUP_ORDER
+  const grouped = GROUP_ORDER.map(group => ({
+    group,
+    items: filtered.filter(n => getDateGroupLabel(n.created_at) === group),
+  })).filter(g => g.items.length > 0);
+
+  const actions = selected ? getActionsForCategory(selected.category) : [];
+  const selectedVisual = selected ? getCategoryVisual(selected.category, selected.type) : null;
 
   return (
     <View style={styles.container}>
-      {/* Header */}
-      <View style={styles.header}>
+      <View style={[styles.header, { paddingTop: insets.top + 8 }]}>
         <View style={styles.headerTop}>
           <Text style={styles.headerTitle}>Notifications</Text>
-          {unreadCount > 0 && (
-            <TouchableOpacity style={styles.markAllBtn} onPress={handleMarkAllAsRead}>
-              <Ionicons name="checkmark-done" size={14} color={GOLD} />
-              <Text style={styles.markAllText}>Mark all read</Text>
-            </TouchableOpacity>
-          )}
+          <TouchableOpacity style={styles.gearBtn} onPress={() => router.push('/(tabs)/settings' as any)} activeOpacity={0.7}>
+            <Ionicons name="settings-outline" size={19} color={INK} />
+          </TouchableOpacity>
         </View>
 
-        {/* Filter pills */}
         <View style={styles.filterRow}>
-          {(['all', 'unread'] as const).map(f => (
+          {([
+            { key: 'all', label: 'All' },
+            { key: 'reminders', label: 'Reminders' },
+            { key: 'appointments', label: 'Appointments' },
+            { key: 'updates', label: 'Updates' },
+          ] as const).map(f => (
             <TouchableOpacity
-              key={f}
-              style={[styles.filterPill, filter === f && styles.filterPillActive]}
-              onPress={() => setFilter(f)}
+              key={f.key}
+              style={[styles.filterPill, filter === f.key && styles.filterPillActive]}
+              onPress={() => setFilter(f.key)}
+              activeOpacity={0.8}
             >
-              <Text style={[styles.filterPillText, filter === f && styles.filterPillTextActive]}>
-                {f === 'all'
-                  ? `All${notifications.length > 0 ? ` (${notifications.length})` : ''}`
-                  : `Unread${unreadCount > 0 ? ` (${unreadCount})` : ''}`}
+              <Text style={[styles.filterPillText, filter === f.key && styles.filterPillTextActive]}>
+                {f.label}
               </Text>
             </TouchableOpacity>
           ))}
         </View>
-
-        {/* Hint */}
-        <Text style={styles.swipeHint}>← Swipe left on a notification for actions</Text>
       </View>
 
       {isLoading ? (
-        <ActivityIndicator size="large" color={NAV} style={{ marginTop: 48 }} />
+        <ActivityIndicator size="large" color={TEAL} style={{ marginTop: 48 }} />
       ) : (
-        <FlatList
-          data={displayed}
-          keyExtractor={item => item.id}
-          renderItem={renderItem}
+        <ScrollView
+          contentContainerStyle={grouped.length === 0 ? styles.emptyContainer : styles.scrollContent}
+          showsVerticalScrollIndicator={false}
           refreshControl={
-            <RefreshControl
-              refreshing={refreshing}
-              onRefresh={() => { setRefreshing(true); fetchNotifications(); }}
-              tintColor={NAV}
-            />
+            <RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); fetchNotifications(); }} tintColor={TEAL} />
           }
-          ItemSeparatorComponent={() => <View style={styles.separator} />}
-          ListEmptyComponent={
+        >
+          {grouped.length === 0 ? (
             <View style={styles.empty}>
               <View style={styles.emptyIconWrap}>
-                <Ionicons name="notifications-off-outline" size={32} color={GOLD} />
+                <Ionicons name="notifications-off-outline" size={28} color="#fff" />
               </View>
-              <Text style={styles.emptyTitle}>
-                {filter === 'unread' ? 'All caught up!' : 'No notifications yet'}
-              </Text>
-              <Text style={styles.emptyText}>
-                {filter === 'unread'
-                  ? 'You have no unread notifications.'
-                  : 'Notifications about your appointments will appear here.'}
-              </Text>
+              <Text style={styles.emptyTitle}>No notifications yet</Text>
+              <Text style={styles.emptyText}>Notifications about your appointments and pets will appear here.</Text>
             </View>
-          }
-          contentContainerStyle={displayed.length === 0 ? styles.emptyContainer : undefined}
-        />
+          ) : (
+            grouped.map(({ group, items }) => (
+              <View key={group} style={styles.dateSection}>
+                <Text style={styles.dateSectionTitle}>{group}</Text>
+                {items.map(item => {
+                  const visual = getCategoryVisual(item.category, item.type);
+                  const isUnread = !item.is_read;
+                  return (
+                    <TouchableOpacity
+                      key={item.id}
+                      style={styles.item}
+                      onPress={() => openDetail(item)}
+                      onLongPress={() => handleDelete(item.id)}
+                      activeOpacity={0.75}
+                    >
+                      <View style={[styles.iconBubble, { backgroundColor: visual.bg }]}>
+                        <Ionicons name={visual.icon} size={19} color={visual.fg} />
+                      </View>
+
+                      <View style={styles.itemBody}>
+                        <View style={styles.itemTitleRow}>
+                          <Text style={styles.itemTitle} numberOfLines={1}>{item.title}</Text>
+                          {isUnread && <View style={styles.unreadDot} />}
+                        </View>
+                        <Text style={styles.itemMessage} numberOfLines={2}>{item.message}</Text>
+                        <View style={styles.itemTimeRow}>
+                          <Ionicons name="time-outline" size={11} color="#9CA3AF" />
+                          <Text style={styles.itemTime}>{formatItemTime(item.created_at, group)}</Text>
+                        </View>
+                      </View>
+
+                      <Ionicons name="chevron-forward" size={16} color="#D1D5DB" />
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+            ))
+          )}
+        </ScrollView>
+      )}
+
+      {/* ── Dynamic detail bottom sheet ── */}
+      <Modal visible={!!selected} transparent animationType="slide" onRequestClose={closeDetail}>
+        <View style={styles.sheetOverlay}>
+          <TouchableOpacity style={{ flex: 1 }} activeOpacity={1} onPress={closeDetail} />
+          <View style={styles.sheet}>
+            <View style={styles.sheetHandle} />
+
+            {selected && selectedVisual && (
+              <>
+                <View style={styles.sheetHeader}>
+                  <View style={[styles.sheetIconWrap, { backgroundColor: selectedVisual.bg }]}>
+                    <Ionicons name={selectedVisual.icon} size={22} color={selectedVisual.fg} />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.sheetTitle}>{selected.title}</Text>
+                    {detailData?.pet_name || detailData?.pets?.name ? (
+                      <Text style={styles.sheetSub}>
+                        {detailData.pet_name || detailData.pets?.name}
+                        {selected.category === 'grooming_reminder' ? ' · Grooming' : ''}
+                      </Text>
+                    ) : null}
+                  </View>
+                  <TouchableOpacity style={styles.sheetCloseBtn} onPress={closeDetail}>
+                    <Ionicons name="close" size={20} color={SUB} />
+                  </TouchableOpacity>
+                </View>
+
+                <ScrollableDetailBody
+                  loading={loadingDetail}
+                  message={selected.message}
+                  detailData={detailData}
+                  category={selected.category}
+                />
+
+                {actions.length > 0 && (
+                  <View style={styles.actionsSection}>
+                    <Text style={styles.actionsSectionTitle}>Actions</Text>
+                    <View style={styles.actionsCard}>
+                      {actions.map((a, i) => (
+                        <View key={a.key}>
+                          <TouchableOpacity
+                            style={styles.actionRow}
+                            onPress={() => handleAction(a.key)}
+                            disabled={!!actionLoading}
+                            activeOpacity={0.7}
+                          >
+                            <View style={[styles.actionIconWrap, { backgroundColor: a.bg }]}>
+                              {actionLoading === a.key ? (
+                                <ActivityIndicator size="small" color={a.color} />
+                              ) : (
+                                <Ionicons name={a.icon as any} size={16} color={a.color} />
+                              )}
+                            </View>
+                            <View style={{ flex: 1 }}>
+                              <Text style={styles.actionLabel}>{a.label}</Text>
+                              <Text style={styles.actionSublabel}>{a.sublabel}</Text>
+                            </View>
+                            <Ionicons name="chevron-forward" size={16} color="#D1D5DB" />
+                          </TouchableOpacity>
+                          {i < actions.length - 1 && <View style={styles.actionDivider} />}
+                        </View>
+                      ))}
+                    </View>
+                  </View>
+                )}
+
+                {!selected.is_read && (
+                  <TouchableOpacity
+                    style={styles.markReadBtn}
+                    onPress={() => { handleMarkAsRead(selected.id); closeDetail(); }}
+                    activeOpacity={0.7}
+                  >
+                    <Ionicons name="checkmark" size={16} color={TEAL} />
+                    <Text style={styles.markReadBtnText}>Mark as read</Text>
+                  </TouchableOpacity>
+                )}
+
+                <View style={{ height: 12 }} />
+              </>
+            )}
+          </View>
+        </View>
+      </Modal>
+    </View>
+  );
+}
+
+function ScrollableDetailBody({ loading, message, detailData, category }: any) {
+  if (loading) {
+    return <ActivityIndicator color={TEAL} style={{ marginVertical: 20 }} />;
+  }
+
+  return (
+    <View style={styles.detailBody}>
+      <Text style={styles.detailMessage}>{message}</Text>
+
+      {category === 'appointment_upcoming' || category === 'appointment_confirmed' ? (
+        detailData && (
+          <View style={styles.detailInfoCard}>
+            <View style={styles.detailInfoRow}>
+              <Ionicons name="calendar-outline" size={15} color={SUB} />
+              <Text style={styles.detailInfoText}>{detailData.requested_date}</Text>
+            </View>
+            {detailData.scheduled_time && (
+              <View style={styles.detailInfoRow}>
+                <Ionicons name="time-outline" size={15} color={SUB} />
+                <Text style={styles.detailInfoText}>{detailData.scheduled_time}</Text>
+              </View>
+            )}
+            <View style={styles.detailInfoRow}>
+              <Ionicons name="paw-outline" size={15} color={SUB} />
+              <Text style={styles.detailInfoText}>{detailData.service}</Text>
+            </View>
+          </View>
+        )
+      ) : null}
+
+      {category === 'medication_reminder' && detailData && (
+        <View style={styles.detailInfoCard}>
+          <View style={styles.detailInfoRow}>
+            <Ionicons name="medical-outline" size={15} color={SUB} />
+            <Text style={styles.detailInfoText}>{detailData.name} {detailData.dosage ? `· ${detailData.dosage}` : ''}</Text>
+          </View>
+          {detailData.scheduled_time && (
+            <View style={styles.detailInfoRow}>
+              <Ionicons name="time-outline" size={15} color={SUB} />
+              <Text style={styles.detailInfoText}>{detailData.scheduled_time}</Text>
+            </View>
+          )}
+        </View>
       )}
     </View>
   );
@@ -323,122 +517,89 @@ export default function NotificationsScreen() {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: BG },
 
-  // Header
   header: {
-    backgroundColor: NAV,
-    paddingHorizontal: 16,
-    paddingTop: 16,
-    paddingBottom: 14,
-    gap: 10,
-  },
-  headerTop: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
-  headerTitle: {
-    color: '#fff',
-    fontSize: 20,
-    fontWeight: '800',
-    letterSpacing: -0.3,
-  },
-  markAllBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    backgroundColor: 'rgba(255,255,255,0.1)',
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-    borderRadius: 20,
-  },
-  markAllText: { color: GOLD, fontSize: 11, fontWeight: '600' },
-  filterRow: { flexDirection: 'row', gap: 8 },
-  filterPill: {
-    paddingHorizontal: 14,
-    paddingVertical: 6,
-    borderRadius: 20,
-    backgroundColor: 'rgba(255,255,255,0.1)',
-  },
-  filterPillActive: { backgroundColor: GOLD },
-  filterPillText: { color: 'rgba(255,255,255,0.7)', fontSize: 12, fontWeight: '600' },
-  filterPillTextActive: { color: NAV },
-  swipeHint: {
-    color: 'rgba(255,255,255,0.35)',
-    fontSize: 10,
-    fontWeight: '500',
-    letterSpacing: 0.2,
-  },
-
-  // Swipe actions
-  actions: {
-    position: 'absolute',
-    right: 0,
-    top: 0,
-    bottom: 0,
-    width: ACTION_WIDTH,
-    flexDirection: 'row',
-  },
-  actionBtn: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 4,
-  },
-  actionRead: { backgroundColor: '#2196F3' },
-  actionDelete: { backgroundColor: '#ef4444' },
-  actionText: {
-    color: '#fff',
-    fontSize: 10,
-    fontWeight: '700',
-    textAlign: 'center',
-  },
-
-  // Notification item
-  item: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 16,
-    paddingVertical: 14,
     backgroundColor: '#fff',
+    paddingHorizontal: 18,
+    paddingBottom: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: BORDER,
     gap: 12,
   },
-  itemUnread: { backgroundColor: '#eef2ff' },
-  iconBubble: {
-    width: 46,
-    height: 46,
-    borderRadius: 23,
-    alignItems: 'center',
-    justifyContent: 'center',
-    flexShrink: 0,
-  },
-  itemBody: { flex: 1, gap: 3 },
-  itemTop: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: 8,
-  },
-  itemTitle: { fontSize: 13.5, fontWeight: '600', color: '#374151', flex: 1 },
-  itemTitleUnread: { fontWeight: '800', color: NAV },
-  itemTime: { fontSize: 11, color: '#9ca3af', flexShrink: 0 },
-  itemMessage: { fontSize: 12.5, color: '#6b7280', lineHeight: 17 },
-  unreadDot: {
-    width: 10,
-    height: 10,
-    borderRadius: 5,
-    backgroundColor: NAV,
-    flexShrink: 0,
-  },
-  separator: { height: 1, backgroundColor: '#f0f2f8' },
+  headerTop: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  headerTitle: { color: INK, fontSize: 24, fontWeight: '800', letterSpacing: -0.4 },
+  gearBtn: { width: 38, height: 38, borderRadius: 19, backgroundColor: BG, alignItems: 'center', justifyContent: 'center' },
 
-  // Empty
+  filterRow: { flexDirection: 'row', gap: 8 },
+  filterPill: { paddingHorizontal: 14, paddingVertical: 7, borderRadius: 20, backgroundColor: BG },
+  filterPillActive: { backgroundColor: '#fff', borderWidth: 1.5, borderColor: TEAL },
+  filterPillText: { color: SUB, fontSize: 12, fontWeight: '600' },
+  filterPillTextActive: { color: TEAL, fontWeight: '700' },
+
+  scrollContent: { paddingHorizontal: 18, paddingTop: 16, paddingBottom: 24 },
+
+  dateSection: { marginBottom: 18 },
+  dateSectionTitle: { fontSize: 13, fontWeight: '800', color: INK, marginBottom: 8 },
+
+  item: {
+    flexDirection: 'row', alignItems: 'center', gap: 12,
+    backgroundColor: '#fff', borderRadius: 14, padding: 12, marginBottom: 9,
+    shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.04, shadowRadius: 5, elevation: 1,
+  },
+  iconBubble: { width: 42, height: 42, borderRadius: 21, alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
+  itemBody: { flex: 1, gap: 3 },
+  itemTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  itemTitle: { fontSize: 13.5, fontWeight: '800', color: INK, flexShrink: 1 },
+  itemMessage: { fontSize: 12, color: SUB, lineHeight: 16.5 },
+  itemTimeRow: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 1 },
+  itemTime: { fontSize: 10.5, color: '#9CA3AF' },
+  unreadDot: { width: 7, height: 7, borderRadius: 3.5, backgroundColor: ORANGE },
+
   emptyContainer: { flex: 1, justifyContent: 'center' },
   empty: { alignItems: 'center', paddingHorizontal: 32, gap: 10 },
-  emptyIconWrap: {
-    width: 72, height: 72, borderRadius: 36,
-    backgroundColor: NAV, alignItems: 'center', justifyContent: 'center',
-    marginBottom: 4,
+  emptyIconWrap: { width: 68, height: 68, borderRadius: 34, backgroundColor: TEAL, alignItems: 'center', justifyContent: 'center', marginBottom: 4 },
+  emptyTitle: { fontSize: 16, fontWeight: '800', color: INK },
+  emptyText: { fontSize: 13, color: SUB, textAlign: 'center', lineHeight: 19 },
+
+  /* ── Detail sheet ── */
+  sheetOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.45)', justifyContent: 'flex-end' },
+  sheet: {
+    backgroundColor: '#fff', borderTopLeftRadius: 20, borderTopRightRadius: 20,
+    paddingHorizontal: 20, paddingTop: 10, maxHeight: '85%',
   },
-  emptyTitle: { fontSize: 17, fontWeight: '800', color: NAV, letterSpacing: -0.2 },
-  emptyText: { fontSize: 13, color: '#8a97b0', textAlign: 'center', lineHeight: 19 },
+  sheetHandle: { width: 36, height: 4, borderRadius: 2, backgroundColor: BORDER, alignSelf: 'center', marginBottom: 14 },
+  sheetHeader: { flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 16 },
+  sheetIconWrap: { width: 44, height: 44, borderRadius: 22, alignItems: 'center', justifyContent: 'center' },
+  sheetTitle: { fontSize: 16.5, fontWeight: '800', color: INK },
+  sheetSub: { fontSize: 12.5, color: SUB, marginTop: 2 },
+  sheetCloseBtn: { width: 32, height: 32, borderRadius: 16, backgroundColor: BG, alignItems: 'center', justifyContent: 'center' },
+
+  detailBody: { marginBottom: 8 },
+  detailMessage: { fontSize: 13.5, color: INK, lineHeight: 20, marginBottom: 14 },
+  detailInfoCard: {
+    backgroundColor: BG, borderRadius: 12, padding: 12, gap: 9,
+  },
+  detailInfoRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  detailInfoText: { fontSize: 12.5, color: INK, fontWeight: '500' },
+
+  actionsSection: { marginTop: 6 },
+  actionsSectionTitle: {
+    fontSize: 11, fontWeight: '700', color: SUB,
+    letterSpacing: 0.8, textTransform: 'uppercase', marginBottom: 8,
+  },
+  actionsCard: {
+    backgroundColor: '#fff', borderRadius: 14, borderWidth: 1, borderColor: BORDER,
+    overflow: 'hidden',
+  },
+  actionRow: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 14, paddingVertical: 13 },
+  actionIconWrap: { width: 36, height: 36, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
+  actionLabel: { fontSize: 13.5, fontWeight: '700', color: INK },
+  actionSublabel: { fontSize: 11, color: SUB, marginTop: 1 },
+  actionDivider: { height: 1, backgroundColor: BORDER, marginLeft: 62 },
+
+  markReadBtn: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6,
+    marginTop: 14, paddingVertical: 12,
+    backgroundColor: TEAL_LIGHT, borderRadius: 12,
+  },
+  markReadBtnText: { color: TEAL, fontSize: 13, fontWeight: '700' },
 });

@@ -13,28 +13,21 @@ import {
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { supabase } from '../lib/supabase';
-import Svg, { Path, Line, Circle } from 'react-native-svg';
+import {
+  ArrowLeft, ArrowRight, Eye, EyeOff, PawPrint, Check, X, MailCheck,
+} from 'lucide-react-native';
+import { colors, text, space, radius, shadow, common, hitSlop } from '../constants/theme';
 
-const NAVY = '#12175e';
-const GOLD = '#c9a227';
-const WHITE = '#ffffff';
-const WHITE_DIM = 'rgba(255,255,255,0.45)';
-const WHITE_FAINT = 'rgba(255,255,255,0.07)';
-const WHITE_BORDER = 'rgba(255,255,255,0.15)';
-
-const EyeIcon = ({ open }: { open: boolean }) =>
-  open ? (
-    <Svg width={17} height={17} viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.45)" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
-      <Path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94" />
-      <Path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19" />
-      <Line x1="1" y1="1" x2="23" y2="23" />
-    </Svg>
-  ) : (
-    <Svg width={17} height={17} viewBox="0 0 24 24" fill="none" stroke="rgba(255,255,255,0.45)" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
-      <Path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
-      <Circle cx="12" cy="12" r="3" />
-    </Svg>
+function BrandMark({ size = 38 }: { size?: number }) {
+  return (
+    <View style={[styles.markTile, { width: size, height: size, borderRadius: size * 0.32 }]}>
+      <PawPrint size={size * 0.52} color={colors.primary} strokeWidth={2.2} />
+      <View style={styles.markBadge}>
+        <Check size={9} color={colors.foreground} strokeWidth={3.5} />
+      </View>
+    </View>
   );
+}
 
 export default function RegisterScreen() {
   const [fullName, setFullName] = useState('');
@@ -45,10 +38,20 @@ export default function RegisterScreen() {
   const [showConfirm, setShowConfirm] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
+  /* Supabase either signs the user straight in or sends a confirmation
+     email, depending on the project setting. The old screen redirected
+     to sign-in either way — so with confirmation on, people tried to
+     sign in immediately, failed, and had no idea an email was waiting. */
+  const [checkEmail, setCheckEmail] = useState(false);
   const router = useRouter();
 
   const passwordsMatch = confirmPassword.length > 0 && password === confirmPassword;
   const passwordsMismatch = confirmPassword.length > 0 && password !== confirmPassword;
+
+  const clear = (setter: (v: string) => void) => (v: string) => {
+    setter(v);
+    if (error) setError('');
+  };
 
   const handleRegister = async () => {
     if (!fullName || !email || !password || !confirmPassword) {
@@ -56,122 +59,169 @@ export default function RegisterScreen() {
       return;
     }
     if (password !== confirmPassword) {
-      setError('Passwords do not match.');
+      setError('Those passwords don\u2019t match.');
       return;
     }
-    if (password.length < 6) {
-      setError('Password must be at least 6 characters.');
+    if (password.length < 8) {
+      setError('Password must be at least 8 characters.');
       return;
     }
+
     setIsLoading(true);
     setError('');
-    const { error } = await supabase.auth.signUp({
-      email,
+
+    const { data, error } = await supabase.auth.signUp({
+      email: email.trim(),
       password,
-      options: { data: { full_name: fullName } },
+      options: { data: { full_name: fullName.trim() } },
     });
+
     setIsLoading(false);
+
     if (error) {
-      setError(error.message);
+      // Supabase returns "User already registered" — readable, but the
+      // useful thing is telling them what to do about it.
+      setError(
+        error.message.toLowerCase().includes('already registered')
+          ? 'An account already exists for that email. Try signing in instead.'
+          : error.message
+      );
       return;
     }
-    router.replace('/signIn');
+
+    // A session means confirmation is off and they're already signed in.
+    if (data.session) {
+      router.replace('/home');
+    } else {
+      setCheckEmail(true);
+    }
   };
+
+  /* ── Confirmation screen ── */
+  if (checkEmail) {
+    return (
+      <View style={styles.container}>
+        <StatusBar barStyle="dark-content" backgroundColor={colors.background} />
+        <View style={styles.confirmWrap}>
+          <View style={styles.confirmIcon}>
+            <MailCheck size={30} color={colors.primary} />
+          </View>
+          <Text style={styles.confirmTitle}>Check your email</Text>
+          <Text style={styles.confirmBody}>
+            We&apos;ve sent a confirmation link to{' '}
+            <Text style={styles.confirmEmail}>{email.trim()}</Text>. Open it to
+            activate your account, then come back and sign in.
+          </Text>
+          <TouchableOpacity
+            style={[styles.btnPrimary, styles.confirmBtn]}
+            onPress={() => router.replace('/signin')}
+            activeOpacity={0.85}
+          >
+            <Text style={styles.btnPrimaryLabel}>Go to sign in</Text>
+            <ArrowRight size={18} color={colors.primaryFg} />
+          </TouchableOpacity>
+        </View>
+      </View>
+    );
+  }
 
   return (
     <KeyboardAvoidingView
       style={styles.container}
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
     >
-      <StatusBar barStyle="light-content" backgroundColor={NAVY} />
-      <View style={styles.stripe} />
+      <StatusBar barStyle="dark-content" backgroundColor={colors.background} />
 
       <ScrollView
         contentContainerStyle={styles.scroll}
         keyboardShouldPersistTaps="handled"
         showsVerticalScrollIndicator={false}
       >
-        {/* Header row */}
         <View style={styles.header}>
           <TouchableOpacity
             style={styles.backBtn}
             onPress={() => router.back()}
             activeOpacity={0.7}
+            hitSlop={hitSlop}
           >
-            <Text style={styles.backArrow}>←</Text>
+            <ArrowLeft size={16} color={colors.mutedFg} />
             <Text style={styles.backLabel}>Back</Text>
           </TouchableOpacity>
-          <View style={styles.crownBox}>
-            <Text style={styles.crownChar}>♛</Text>
-          </View>
+          <BrandMark />
         </View>
 
-        {/* Title */}
         <View style={styles.titleBlock}>
-          <Text style={styles.eyebrow}>Join Pet Royale'</Text>
-          <Text style={styles.title}>
-            Create{'\n'}
-            <Text style={styles.titleItalic}>Account</Text>
+          <Text style={styles.eyebrow}>Join Pet Royale</Text>
+          <Text style={styles.title}>Create account</Text>
+          <Text style={styles.titleSub}>
+            Book visits, keep your pets&apos; records, and shop Pet Essentials.
           </Text>
-          <View style={styles.rule} />
-          <Text style={styles.titleSub}>Pet Royale' Clinic & Veterinary</Text>
         </View>
 
-        {/* Error */}
-        {error ? (
-          <View style={styles.errorBox}>
-            <Text style={styles.errorText}>{error}</Text>
-          </View>
-        ) : null}
+        <View style={styles.errorSlot}>
+          {error ? (
+            <View style={styles.errorBox}>
+              <Text style={styles.errorText}>{error}</Text>
+            </View>
+          ) : null}
+        </View>
 
-        {/* Fields */}
         <View style={styles.form}>
-
-          <View style={styles.field}>
+          <View>
+            <Text style={styles.label}>Full name</Text>
             <TextInput
               style={styles.input}
-              placeholder="Full Name"
-              placeholderTextColor={WHITE_DIM}
+              placeholder="Enter your name"
+              placeholderTextColor={colors.mutedFg}
               value={fullName}
-              onChangeText={setFullName}
+              onChangeText={clear(setFullName)}
               autoCapitalize="words"
+              autoComplete="name"
             />
           </View>
 
-          <View style={styles.field}>
+          <View>
+            <Text style={styles.label}>Email address</Text>
             <TextInput
               style={styles.input}
-              placeholder="Email Address"
-              placeholderTextColor={WHITE_DIM}
+              placeholder="you@gmail.com"
+              placeholderTextColor={colors.mutedFg}
               value={email}
-              onChangeText={setEmail}
+              onChangeText={clear(setEmail)}
               keyboardType="email-address"
               autoCapitalize="none"
+              autoComplete="email"
             />
           </View>
 
-          <View style={styles.field}>
+          <View>
+            <Text style={styles.label}>Password</Text>
             <View style={styles.inputWrap}>
               <TextInput
                 style={[styles.input, styles.inputWithToggle]}
-                placeholder="Password"
-                placeholderTextColor={WHITE_DIM}
+                placeholder="At least 8 characters"
+                placeholderTextColor={colors.mutedFg}
                 value={password}
-                onChangeText={setPassword}
+                onChangeText={clear(setPassword)}
                 secureTextEntry={!showPassword}
+                autoComplete="new-password"
               />
               <TouchableOpacity
                 style={styles.eyeBtn}
-                onPress={() => setShowPassword(v => !v)}
+                onPress={() => setShowPassword((v) => !v)}
                 activeOpacity={0.7}
-                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                hitSlop={hitSlop}
+                accessibilityLabel={showPassword ? 'Hide password' : 'Show password'}
               >
-                <EyeIcon open={showPassword} />
+                {showPassword
+                  ? <EyeOff size={18} color={colors.mutedFg} />
+                  : <Eye size={18} color={colors.mutedFg} />}
               </TouchableOpacity>
             </View>
           </View>
 
-          <View style={styles.field}>
+          <View>
+            <Text style={styles.label}>Confirm password</Text>
             <View style={styles.inputWrap}>
               <TextInput
                 style={[
@@ -180,331 +230,231 @@ export default function RegisterScreen() {
                   passwordsMatch && styles.inputMatch,
                   passwordsMismatch && styles.inputMismatch,
                 ]}
-                placeholder="Confirm Password"
-                placeholderTextColor={WHITE_DIM}
+                placeholder="Re-enter your password"
+                placeholderTextColor={colors.mutedFg}
                 value={confirmPassword}
-                onChangeText={setConfirmPassword}
+                onChangeText={clear(setConfirmPassword)}
                 secureTextEntry={!showConfirm}
+                autoComplete="new-password"
+                returnKeyType="go"
+                onSubmitEditing={handleRegister}
               />
               <TouchableOpacity
                 style={styles.eyeBtn}
-                onPress={() => setShowConfirm(v => !v)}
+                onPress={() => setShowConfirm((v) => !v)}
                 activeOpacity={0.7}
-                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                hitSlop={hitSlop}
+                accessibilityLabel={showConfirm ? 'Hide password' : 'Show password'}
               >
-                <EyeIcon open={showConfirm} />
+                {showConfirm
+                  ? <EyeOff size={18} color={colors.mutedFg} />
+                  : <Eye size={18} color={colors.mutedFg} />}
               </TouchableOpacity>
             </View>
-            {passwordsMatch && (
-              <Text style={styles.matchHintOk}>✓ Passwords match</Text>
-            )}
-            {passwordsMismatch && (
-              <Text style={styles.matchHintNo}>✕ Passwords don't match</Text>
-            )}
-          </View>
 
+            {/* Fixed height, so the row appearing doesn't push the button
+                out from under a thumb already reaching for it. */}
+            <View style={styles.hintSlot}>
+              {passwordsMatch && (
+                <View style={styles.hintRow}>
+                  <Check size={13} color={colors.primary} strokeWidth={3} />
+                  <Text style={styles.hintOk}>Passwords match</Text>
+                </View>
+              )}
+              {passwordsMismatch && (
+                <View style={styles.hintRow}>
+                  <X size={13} color={colors.destructive} strokeWidth={3} />
+                  <Text style={styles.hintNo}>Passwords don&apos;t match</Text>
+                </View>
+              )}
+            </View>
+          </View>
         </View>
 
-        {/* Register button */}
         <TouchableOpacity
-          style={styles.btnPrimary}
+          style={[styles.btnPrimary, isLoading && styles.btnPrimaryLoading]}
           onPress={handleRegister}
           disabled={isLoading}
           activeOpacity={0.85}
         >
           {isLoading ? (
-            <ActivityIndicator color={NAVY} />
+            <ActivityIndicator color={colors.primaryFg} />
           ) : (
             <>
-              <View>
-                <Text style={styles.btnPrimaryLabel}>Create Account</Text>
-                <Text style={styles.btnPrimaryHint}>Start your journey</Text>
-              </View>
-              <View style={styles.btnArrowBox}>
-                <Text style={styles.btnArrowText}>→</Text>
-              </View>
+              <Text style={styles.btnPrimaryLabel}>Create account</Text>
+              <ArrowRight size={18} color={colors.primaryFg} />
             </>
           )}
         </TouchableOpacity>
 
-        {/* Sign in link */}
         <TouchableOpacity
           style={styles.linkRow}
-          onPress={() => router.push('/signIn')}
+          onPress={() => router.push('/signin')}
           activeOpacity={0.7}
         >
           <Text style={styles.linkText}>Already have an account? </Text>
-          <View style={styles.linkUnderline}>
-            <Text style={styles.linkHighlight}>Sign In</Text>
-          </View>
+          <Text style={styles.linkHighlight}>Sign in</Text>
         </TouchableOpacity>
 
-        {/* Bottom divider */}
         <View style={styles.bottomMark}>
           <View style={styles.dividerRow}>
             <View style={styles.dividerLine} />
-            <Text style={styles.dividerCrown}>♛</Text>
+            <PawPrint size={14} color={colors.border} />
             <View style={styles.dividerLine} />
           </View>
-          <Text style={styles.bottomSub}>"We Care For You and Your Pets"</Text>
+          <Text style={styles.bottomSub}>We care for you and your pets</Text>
         </View>
-
       </ScrollView>
     </KeyboardAvoidingView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: NAVY,
+  container: { ...common.screen },
+
+  markTile: {
+    backgroundColor: colors.secondary,
+    alignItems: 'center',
+    justifyContent: 'center',
+    ...shadow.card,
   },
-  stripe: {
-    height: 5,
-    backgroundColor: GOLD,
-  },
-  scroll: {
-    flexGrow: 1,
-    paddingBottom: 48,
+  markBadge: {
+    position: 'absolute',
+    top: -3,
+    right: -3,
+    width: 16,
+    height: 16,
+    borderRadius: 8,
+    backgroundColor: colors.accent,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
 
-  // Header
+  scroll: {
+    flexGrow: 1,
+    paddingBottom: space.xxxl,
+  },
+
   header: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    paddingHorizontal: 22,
-    paddingTop: 20,
+    paddingHorizontal: space.xxl,
+    paddingTop: space.xxl,
   },
-  backBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    borderWidth: 1,
-    borderColor: 'rgba(201,162,39,0.4)',
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 8,
-  },
-  backArrow: {
-    fontSize: 14,
-    color: GOLD,
-    fontFamily: 'serif',
-  },
-  backLabel: {
-    fontSize: 10,
-    fontWeight: '500',
-    color: GOLD,
-    letterSpacing: 1.5,
-    textTransform: 'uppercase',
-  },
-  crownBox: {
-    width: 32,
-    height: 32,
-    backgroundColor: GOLD,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderRadius: 8,
-  },
-  crownChar: {
-    fontSize: 15,
-    color: NAVY,
-  },
+  backBtn: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  backLabel: { ...text.smallBold, color: colors.mutedFg },
 
-  // Title
   titleBlock: {
-    paddingHorizontal: 22,
-    paddingTop: 36,
+    paddingHorizontal: space.xxl,
+    paddingTop: space.xxxl,
   },
-  eyebrow: {
-    fontSize: 13,
-    fontWeight: '500',
-    letterSpacing: 3,
-    color: 'rgba(255,255,255,0.3)',
-    textTransform: 'uppercase',
-    marginBottom: 10,
-  },
+  eyebrow: { ...text.eyebrow, color: colors.primary, marginBottom: space.md },
   title: {
-    fontSize: 52,
-    fontWeight: '700',
-    color: WHITE,
-    fontFamily: 'serif',
-    lineHeight: 50,
+    fontFamily: text.display.fontFamily,
+    fontSize: 40,
+    lineHeight: 44,
+    letterSpacing: -1.6,
+    color: colors.foreground,
   },
-  titleItalic: {
-    color: GOLD,
-    fontStyle: 'italic',
-    fontFamily: 'serif',
-  },
-  rule: {
-    width: 32,
-    height: 1,
-    backgroundColor: GOLD,
-    marginTop: 18,
-    marginBottom: 14,
-  },
-  titleSub: {
-    fontSize: 15,
-    fontWeight: '300',
-    color: 'rgba(255,255,255,0.35)',
-  },
+  titleSub: { ...text.body, color: colors.mutedFg, marginTop: space.md },
 
-  // Error
+  errorSlot: {
+    minHeight: 52,
+    justifyContent: 'center',
+    paddingHorizontal: space.xxl,
+  },
   errorBox: {
-    marginHorizontal: 22,
-    marginTop: 20,
     borderWidth: 1,
-    borderColor: 'rgba(255,107,107,0.35)',
-    backgroundColor: 'rgba(255,107,107,0.07)',
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-    borderRadius: 8,  
+    borderColor: colors.destructive,
+    backgroundColor: '#FCE9E7',
+    paddingHorizontal: space.lg,
+    paddingVertical: space.md,
+    borderRadius: radius.md,
   },
-  errorText: {
-    fontSize: 13,
-    color: '#ff6b6b',
-  },
+  errorText: { ...text.small, color: colors.destructive },
 
-  // Form
   form: {
-    paddingHorizontal: 22,
-    paddingTop: 24,
-    gap: 16,
+    paddingHorizontal: space.xxl,
+    gap: space.lg,
   },
-  field: {
-    gap: 6,
-  },
-  input: {
-    borderWidth: 1,
-    borderColor: WHITE_BORDER,
-    backgroundColor: WHITE_FAINT,
-    paddingHorizontal: 14,
-    paddingVertical: 14,
-    fontSize: 15,
-    color: WHITE,
-    borderRadius: 10,
-  },
-  inputWrap: {
-    position: 'relative',
-    justifyContent: 'center',
-  },
-  inputWithToggle: {
-    paddingRight: 48,
-  },
-  inputMatch: {
-    borderColor: 'rgba(45,122,79,0.7)',
-  },
-  inputMismatch: {
-    borderColor: 'rgba(192,57,43,0.7)',
-  },
-  eyeBtn: {
-    position: 'absolute',
-    right: 14,
-    padding: 2,
-  },
-  matchHintOk: {
-    fontSize: 11,
-    fontWeight: '500',
-    color: '#4caf7d',
-    marginTop: 4,
-  },
-  matchHintNo: {
-    fontSize: 11,
-    fontWeight: '500',
-    color: '#e57373',
-    marginTop: 4,
-  },
+  label: { ...common.label },
+  input: { ...common.input },
+  inputWrap: { position: 'relative', justifyContent: 'center' },
+  inputWithToggle: { paddingRight: 50 },
+  inputMatch: { borderColor: colors.primary },
+  inputMismatch: { borderColor: colors.destructive },
+  eyeBtn: { position: 'absolute', right: space.lg },
 
-  // Button
+  hintSlot: { minHeight: 22, justifyContent: 'center' },
+  hintRow: { flexDirection: 'row', alignItems: 'center', gap: 5, marginTop: 5 },
+  hintOk: { ...text.caption, color: colors.primary },
+  hintNo: { ...text.caption, color: colors.destructive },
+
   btnPrimary: {
-    marginHorizontal: 22,
-    marginTop: 22,
-    backgroundColor: GOLD,
-    height: 56,
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingHorizontal: 18,
-    borderRadius: 12,
+    ...common.buttonPrimary,
+    marginHorizontal: space.xxl,
+    marginTop: space.lg,
+    ...shadow.primary,
   },
-  btnPrimaryLabel: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: NAVY,
-    letterSpacing: 0.8,
-    textTransform: 'uppercase',
-  },
-  btnPrimaryHint: {
-    fontSize: 14,
-    fontStyle: 'italic',
-    color: 'rgba(13,16,64,0.45)',
-    fontFamily: 'serif',
-    marginTop: 2,
-  },
-  btnArrowBox: {
-    width: 32,
-    height: 32,
-    borderWidth: 1.5,
-    borderColor: 'rgba(13,16,64,0.18)',
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderRadius: 8,
-  },
-  btnArrowText: {
-    fontSize: 18,
-    color: NAVY,
-    fontFamily: 'serif',
-  },
+  btnPrimaryLoading: { backgroundColor: colors.primaryDark },
+  btnPrimaryLabel: { ...common.buttonPrimaryText },
 
-  // Link
   linkRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    marginTop: 18,
-    gap: 3,
+    marginTop: space.xl,
   },
-  linkText: {
-    fontSize: 15,
-    color: 'rgba(255,255,255,0.35)',
-    fontWeight: '300',
-  },
-  linkUnderline: {
-    borderBottomWidth: 1,
-    borderBottomColor: GOLD,
-  },
-  linkHighlight: {
-    fontSize: 15,
-    fontWeight: '600',
-    color: GOLD,
-  },
+  linkText: { ...text.body, color: colors.mutedFg },
+  linkHighlight: { ...text.bodyBold, color: colors.primary },
 
-  // Bottom
   bottomMark: {
     marginTop: 44,
-    paddingHorizontal: 22,
+    paddingHorizontal: space.xxl,
     alignItems: 'center',
-    gap: 12,
+    gap: space.md,
   },
-  dividerRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-    width: '100%',
-  },
-  dividerLine: {
-    flex: 1,
-    height: 1,
-    backgroundColor: 'rgba(201,162,39,0.18)',
-  },
-  dividerCrown: {
-    color: 'rgba(201,162,39,0.28)',
-    fontSize: 15,
-  },
+  dividerRow: { flexDirection: 'row', alignItems: 'center', gap: space.md, width: '100%' },
+  dividerLine: { flex: 1, height: 1, backgroundColor: colors.border },
   bottomSub: {
-    fontSize: 15,
-    fontStyle: 'italic',
-    color: 'rgba(255,255,255,0.15)',
-    fontFamily: 'serif',
+    fontFamily: text.displayRegular.fontFamily,
+    fontSize: 14,
+    color: colors.mutedFg,
+  },
+
+  confirmWrap: {
+    flex: 1,
+    justifyContent: 'center',
+    paddingHorizontal: space.xxl,
+  },
+  confirmIcon: {
+    width: 64,
+    height: 64,
+    borderRadius: 22,
+    backgroundColor: colors.secondary,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: space.xxl,
+  },
+  confirmTitle: {
+    fontFamily: text.display.fontFamily,
+    fontSize: 34,
+    lineHeight: 38,
+    letterSpacing: -1.3,
+    color: colors.foreground,
+  },
+  confirmBody: {
+    ...text.body,
+    color: colors.mutedFg,
+    marginTop: space.lg,
+  },
+  confirmEmail: {
+    ...text.bodyBold,
+    color: colors.foreground,
+  },
+  confirmBtn: {
+    marginHorizontal: 0,
+    marginTop: space.xxxl,
   },
 });

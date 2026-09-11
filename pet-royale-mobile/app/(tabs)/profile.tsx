@@ -1,41 +1,35 @@
 import { useState, useEffect } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
-  ActivityIndicator, Alert, Image, Modal,
-  Pressable, StatusBar, Platform
+  ActivityIndicator, Image, Alert,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { supabase } from '@/lib/supabase';
 import { useRouter } from 'expo-router';
-import * as ImagePicker from 'expo-image-picker';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import Constants from 'expo-constants';
 
-// ── Matching HomeScreen colors exactly ──────────────────────────────────────
-const NAVY = '#1a237e';
-const GOLD = '#f5c518';
-const CREAM_BORDER = '#e8e0cc';
-const TAUPE = '#8a7d5a';
-const BG = '#f0f2f8';
-
-function Icon({ name, emoji, size = 20, color = NAVY }: { name: any, emoji: string, size?: number, color?: string }) {
-  if (Platform.OS === 'web') return <Text style={{ fontSize: size * 0.85 }}>{emoji}</Text>;
-  return <Ionicons name={name} size={size} color={color} />;
-}
+const TEAL = '#0D9488';
+const TEAL_LIGHT = '#CCFBF1';
+const BORDER = '#E5E7EB';
+const SUB = '#6B7280';
+const INK = '#111827';
+const BG = '#F4F7FB';
 
 export default function ProfileScreen() {
   const router = useRouter();
+  const insets = useSafeAreaInsets();
+
   const [user, setUser] = useState<any>(null);
   const [isLoading, setIsLoading] = useState(true);
-  const [petCount, setPetCount] = useState(0);
-  const [appointmentCount, setAppointmentCount] = useState(0);
+  const [pets, setPets] = useState<any[]>([]);
   const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
-  const [uploading, setUploading] = useState(false);
-  const [showAvatarSheet, setShowAvatarSheet] = useState(false);
-  const [showImageViewer, setShowImageViewer] = useState(false);
   const [fullName, setFullName] = useState('');
+  const [isVerified, setIsVerified] = useState(false);
 
-  useEffect(() => {
-    fetchUserData();
-  }, []);
+  const appVersion = Constants.expoConfig?.version || '1.0.0';
+
+  useEffect(() => { fetchUserData(); }, []);
 
   const fetchUserData = async () => {
     const { data: { user } } = await supabase.auth.getUser();
@@ -43,307 +37,200 @@ export default function ProfileScreen() {
       setUser(user);
       setFullName(user.user_metadata?.full_name || '');
       setAvatarUrl(user.user_metadata?.avatar_url || null);
+      setIsVerified(!!user.email_confirmed_at);
 
-      const { count: pets } = await (supabase as any)
-        .from('pets').select('*', { count: 'exact', head: true })
-        .eq('owner_id', user.id);
-      setPetCount(pets || 0);
-
-      const { count: appts } = await (supabase as any)
-        .from('appointments').select('*', { count: 'exact', head: true })
-        .eq('client_name', user.user_metadata?.full_name || user.email);
-      setAppointmentCount(appts || 0);
+      const { data: petsData } = await (supabase as any)
+        .from('pets')
+        .select('*')
+        .eq('owner_id', user.id)
+        .order('created_at', { ascending: false });
+      setPets(petsData || []);
     }
     setIsLoading(false);
   };
 
-  const handleAvatarPress = () => {
-    if (avatarUrl) setShowAvatarSheet(true);
-    else pickImage();
-  };
-
-  const pickImage = async () => {
-    setShowAvatarSheet(false);
-    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (status !== 'granted') {
-      Alert.alert('Permission Required', 'Please allow access to your photo library.');
-      return;
-    }
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ['images'] as any,
-      allowsEditing: true,
-      aspect: [1, 1],
-      quality: 0.6,
-    });
-    if (!result.canceled) uploadAvatar(result.assets[0].uri);
-  };
-
-  const takePhoto = async () => {
-    setShowAvatarSheet(false);
-    const { status } = await ImagePicker.requestCameraPermissionsAsync();
-    if (status !== 'granted') {
-      Alert.alert('Permission Required', 'Please allow camera access.');
-      return;
-    }
-    const result = await ImagePicker.launchCameraAsync({
-      allowsEditing: true,
-      aspect: [1, 1],
-      quality: 0.6,
-    });
-    if (!result.canceled) uploadAvatar(result.assets[0].uri);
-  };
-
-  const deleteAvatar = async () => {
-    setShowAvatarSheet(false);
-    Alert.alert('Remove Photo', 'Are you sure you want to remove your profile photo?', [
+  const handleSignOut = () => {
+    Alert.alert('Log Out', 'Are you sure you want to log out?', [
       { text: 'Cancel', style: 'cancel' },
       {
-        text: 'Remove', style: 'destructive',
+        text: 'Log Out',
+        style: 'destructive',
         onPress: async () => {
-          await supabase.auth.updateUser({ data: { avatar_url: null } });
-          setAvatarUrl(null);
+          await supabase.auth.signOut();
+          router.replace('/');
         },
       },
     ]);
   };
 
-  const uploadAvatar = async (uri: string) => {
-    setUploading(true);
-    try {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) return;
-      const fileExt = uri.split('.').pop() || 'jpg';
-      const fileName = `${user.id}.${fileExt}`;
-      const response = await fetch(uri);
-      const arrayBuffer = await response.arrayBuffer();
-      const { error: uploadError } = await supabase.storage
-        .from('avatars').upload(fileName, arrayBuffer, { contentType: `image/${fileExt}`, upsert: true });
-      if (uploadError) throw uploadError;
-      const { data } = supabase.storage.from('avatars').getPublicUrl(fileName);
-      await supabase.auth.updateUser({ data: { avatar_url: data.publicUrl } });
-      setAvatarUrl(data.publicUrl);
-      Alert.alert('Done', 'Profile photo updated!');
-    } catch {
-      Alert.alert('Error', 'Failed to upload photo. Please try again.');
-    } finally {
-      setUploading(false);
-    }
-  };
-
   const initials = fullName?.[0]?.toUpperCase() || user?.email?.[0]?.toUpperCase() || '?';
 
   if (isLoading) {
-    return (
-      <View style={styles.loadingWrap}>
-        <ActivityIndicator size="large" color={NAVY} />
-      </View>
-    );
+    return <View style={styles.loadingWrap}><ActivityIndicator size="large" color={TEAL} /></View>;
   }
 
   return (
-    <>
-      <StatusBar barStyle="light-content" backgroundColor={NAVY} />
-      <ScrollView style={styles.container} showsVerticalScrollIndicator={false}>
+    <View style={styles.container}>
+      <View style={[styles.header, { paddingTop: insets.top + 10 }]}>
+        <Text style={styles.headerTitle}>Profile</Text>
+        <TouchableOpacity style={styles.gearBtn} onPress={() => router.push('/(tabs)/settings' as any)} activeOpacity={0.7}>
+          <Ionicons name="settings-outline" size={19} color={INK} />
+        </TouchableOpacity>
+      </View>
 
-        {/* ── Header — matches HomeScreen exactly ── */}
-        <View style={styles.header}>
-          <View style={styles.headerBrand}>
-            <View style={styles.crownBox}>
-              <Ionicons name="trophy" size={18} color={GOLD} />
-            </View>
-            <View>
-              <Text style={styles.brandName}>Pet Royale'</Text>
-              <Text style={styles.brandSub}>CLINIC & VETERINARY</Text>
-            </View>
-          </View>
-        </View>
-
-        {/* ── Hero / profile block ── */}
-        <View style={styles.hero}>
-
-          {/* Avatar */}
-          <TouchableOpacity style={styles.avatarWrap} onPress={handleAvatarPress} activeOpacity={0.9}>
-            {uploading ? (
-              <View style={styles.avatarInner}>
-                <ActivityIndicator color={NAVY} />
-              </View>
-            ) : avatarUrl ? (
-              <Image source={{ uri: avatarUrl }} style={styles.avatarImage} />
-            ) : (
-              <View style={styles.avatarInner}>
-                <Text style={styles.avatarInitials}>{initials}</Text>
+      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scrollContent}>
+        {/* ── Profile card ── */}
+        <TouchableOpacity style={styles.profileCard} onPress={() => router.push('/account' as any)} activeOpacity={0.85}>
+          {avatarUrl ? (
+            <Image source={{ uri: avatarUrl }} style={styles.avatar} />
+          ) : (
+            <View style={styles.avatarFallback}><Text style={styles.avatarInitials}>{initials}</Text></View>
+          )}
+          <View style={{ flex: 1 }}>
+            <Text style={styles.profileName}>{fullName || 'Pet Owner'}</Text>
+            <Text style={styles.profileEmail}>{user?.email}</Text>
+            {isVerified && (
+              <View style={styles.verifiedPill}>
+                <Ionicons name="checkmark-circle" size={12} color={TEAL} />
+                <Text style={styles.verifiedPillText}>Verified account</Text>
               </View>
             )}
+          </View>
+          <Ionicons name="chevron-forward" size={18} color="#D1D5DB" />
+        </TouchableOpacity>
+
+        {/* ── My Pets ── */}
+        <View style={styles.sectionRow}>
+          <Text style={styles.sectionTitleLg}>My Pets</Text>
+          <TouchableOpacity onPress={() => router.push('/(tabs)/pets' as any)}>
+            <Text style={styles.viewAllText}>View all</Text>
           </TouchableOpacity>
+        </View>
 
-          <Text style={styles.heroName}>{fullName || 'Pet Owner'}</Text>
-          <Text style={styles.heroEmail}>{user?.email}</Text>
-
-          {(user?.user_metadata?.phone || user?.user_metadata?.address) && (
-            <View style={styles.heroMeta}>
-              {user.user_metadata?.phone && (
-                <View style={styles.heroMetaItem}>
-                  <Icon name="call-outline" emoji="📞" size={11} color="rgba(255,255,255,0.5)" />
-                  <Text style={styles.heroMetaText}>{user.user_metadata.phone}</Text>
-                </View>
+        <View style={styles.petTilesRow}>
+          {pets.slice(0, 2).map((pet) => (
+            <TouchableOpacity
+              key={pet.id}
+              style={styles.petTile}
+              onPress={() => router.push({ pathname: '/pet-detail', params: { id: pet.id } } as any)}
+              activeOpacity={0.85}
+            >
+              {pet.photo_url ? (
+                <Image source={{ uri: pet.photo_url }} style={styles.petTilePhoto} />
+              ) : (
+                <View style={styles.petTilePhotoFallback}><Ionicons name="paw" size={22} color={TEAL} /></View>
               )}
-              {user.user_metadata?.address && (
-                <View style={styles.heroMetaItem}>
-                  <Icon name="location-outline" emoji="📍" size={11} color="rgba(255,255,255,0.5)" />
-                  <Text style={styles.heroMetaText} numberOfLines={1}>{user.user_metadata.address}</Text>
-                </View>
-              )}
-            </View>
-          )}
-
-          {/* Set Photo + Edit Info side by side */}
-          <View style={styles.heroBtnRow}>
-            <TouchableOpacity style={styles.editBtn} onPress={handleAvatarPress} activeOpacity={0.85}>
-              <Ionicons name="camera" size={12} color={NAVY} />
-              <Text style={styles.editBtnText}>Set Photo</Text>
+              <Text style={styles.petTileName} numberOfLines={1}>{pet.name}</Text>
+              <Text style={styles.petTileBreed} numberOfLines={1}>{pet.breed || pet.species}</Text>
             </TouchableOpacity>
-
-            <TouchableOpacity style={styles.editBtn} onPress={() => router.push('/account' as any)} activeOpacity={0.85}>
-              <Ionicons name="pencil" size={12} color={NAVY} />
-              <Text style={styles.editBtnText}>Edit Info</Text>
-            </TouchableOpacity>
-          </View>
+          ))}
+          <TouchableOpacity style={styles.addPetTile} onPress={() => router.push('/(tabs)/pets' as any)} activeOpacity={0.8}>
+            <Ionicons name="add" size={22} color={TEAL} />
+            <Text style={styles.addPetTileText}>Add pet</Text>
+          </TouchableOpacity>
         </View>
 
-        {/* ── Stats ── */}
-        <View style={styles.statsRow}>
-          <View style={styles.statCard}>
-            <Text style={styles.statNumber}>{petCount}</Text>
-            <Text style={styles.statLabel}>My Pets</Text>
-          </View>
-          <View style={styles.statDivider} />
-          <View style={styles.statCard}>
-            <Text style={styles.statNumber}>{appointmentCount}</Text>
-            <Text style={styles.statLabel}>Appointments</Text>
-          </View>
-        </View>
-
-        {/* ── Quick Actions ── */}
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Quick Actions</Text>
-          <View style={styles.card}>
-            {[
-              { icon: 'paw-outline', emoji: '🐾', label: 'My Pets', route: '/(tabs)/pets' },
-              { icon: 'calendar-outline', emoji: '📅', label: 'My Appointments', route: '/(tabs)/appointments' },
-              { icon: 'add-circle-outline', emoji: '➕', label: 'Book Appointment', route: '/(tabs)/book' },
-            ].map((item, i, arr) => (
-              <View key={item.label}>
-                <TouchableOpacity
-                  style={styles.linkRow}
-                  onPress={() => router.push(item.route as any)}
-                  activeOpacity={0.7}
-                >
-                  <View style={styles.linkIconWrap}>
-                    <Icon name={item.icon as any} emoji={item.emoji} size={16} color={GOLD} />
-                  </View>
-                  <Text style={styles.linkText}>{item.label}</Text>
-                  <Ionicons name="chevron-forward" size={16} color={CREAM_BORDER} />
-                </TouchableOpacity>
-                {i < arr.length - 1 && <View style={styles.cardDivider} />}
-              </View>
-            ))}
-          </View>
-        </View>
-
-        {/* ── Clinic Info ── */}
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Clinic Information</Text>
-          <View style={styles.clinicCard}>
-            <View style={styles.clinicRow}>
-              <Text style={styles.clinicLabel}>Address</Text>
-              <Text style={styles.clinicValue}>Calbayog City, Eastern Samar</Text>
+        {/* ── ACCOUNT ── */}
+        <Text style={styles.groupLabel}>ACCOUNT</Text>
+        <View style={styles.card}>
+          <TouchableOpacity style={styles.menuRow} onPress={() => router.push('/account' as any)} activeOpacity={0.7}>
+            <View style={styles.menuIconWrap}><Ionicons name="person-outline" size={19} color={TEAL} /></View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.menuLabel}>Personal Information</Text>
+              <Text style={styles.menuSub}>Name, phone and address</Text>
             </View>
-            <View style={styles.clinicDivider} />
-            <View style={styles.clinicRow}>
-              <Text style={styles.clinicLabel}>Operating Hours</Text>
-              <Text style={styles.clinicValue}>Mon - Sat: 8:30 AM - 7:00 PM</Text>
+            <Ionicons name="chevron-forward" size={17} color="#D1D5DB" />
+          </TouchableOpacity>
+          <View style={styles.cardDivider} />
+
+          <TouchableOpacity style={styles.menuRow} onPress={() => router.push('/(tabs)/pets' as any)} activeOpacity={0.7}>
+            <View style={styles.menuIconWrap}><Ionicons name="paw-outline" size={19} color={TEAL} /></View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.menuLabel}>Pets</Text>
+              <Text style={styles.menuSub}>View and manage your pets</Text>
             </View>
-            <View style={styles.clinicDivider} />
-            <View style={styles.clinicRow}>
-              <Text style={styles.clinicLabel}>Grooming Schedule</Text>
-              <Text style={styles.clinicValue}>Tue - Sun: 8:30 AM - 6:00 PM</Text>
+            <View style={styles.countBadge}><Text style={styles.countBadgeText}>{pets.length}</Text></View>
+            <Ionicons name="chevron-forward" size={17} color="#D1D5DB" />
+          </TouchableOpacity>
+          <View style={styles.cardDivider} />
+
+          <TouchableOpacity style={styles.menuRow} onPress={() => router.push('/(tabs)/payment-history' as any)} activeOpacity={0.7}>
+            <View style={styles.menuIconWrap}><Ionicons name="receipt-outline" size={19} color={TEAL} /></View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.menuLabel}>Payment History</Text>
+              <Text style={styles.menuSub}>View your past payments</Text>
             </View>
-          </View>
+            <Ionicons name="chevron-forward" size={17} color="#D1D5DB" />
+          </TouchableOpacity>
         </View>
+
+        {/* ── PREFERENCES ── */}
+        <Text style={styles.groupLabel}>PREFERENCES</Text>
+        <View style={styles.card}>
+          <TouchableOpacity style={styles.menuRow} onPress={() => router.push('/(tabs)/notifications' as any)} activeOpacity={0.7}>
+            <View style={styles.menuIconWrap}><Ionicons name="notifications-outline" size={19} color={TEAL} /></View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.menuLabel}>Notifications</Text>
+              <Text style={styles.menuSub}>Reminders and clinic updates</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={17} color="#D1D5DB" />
+          </TouchableOpacity>
+          <View style={styles.cardDivider} />
+
+          <TouchableOpacity style={styles.menuRow} onPress={() => router.push('/(tabs)/security' as any)} activeOpacity={0.7}>
+            <View style={styles.menuIconWrap}><Ionicons name="shield-outline" size={19} color={TEAL} /></View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.menuLabel}>Security</Text>
+              <Text style={styles.menuSub}>Password, biometrics, sessions</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={17} color="#D1D5DB" />
+          </TouchableOpacity>
+          <View style={styles.cardDivider} />
+
+          <TouchableOpacity style={styles.menuRow} onPress={() => router.push('/(tabs)/settings' as any)} activeOpacity={0.7}>
+            <View style={styles.menuIconWrap}><Ionicons name="settings-outline" size={19} color={TEAL} /></View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.menuLabel}>App Settings</Text>
+              <Text style={styles.menuSub}>Language, theme and units</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={17} color="#D1D5DB" />
+          </TouchableOpacity>
+        </View>
+
+        {/* ── SUPPORT ── */}
+        <Text style={styles.groupLabel}>SUPPORT</Text>
+        <View style={styles.card}>
+          <TouchableOpacity style={styles.menuRow} onPress={() => router.push('/(tabs)/help' as any)} activeOpacity={0.7}>
+            <View style={styles.menuIconWrap}><Ionicons name="help-circle-outline" size={19} color={TEAL} /></View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.menuLabel}>Help & Support</Text>
+              <Text style={styles.menuSub}>Contact the clinic team</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={17} color="#D1D5DB" />
+          </TouchableOpacity>
+          <View style={styles.cardDivider} />
+
+          <TouchableOpacity style={styles.menuRow} onPress={() => router.push('/(tabs)/about' as any)} activeOpacity={0.7}>
+            <View style={styles.menuIconWrap}><Ionicons name="information-circle-outline" size={19} color={TEAL} /></View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.menuLabel}>About Pet Royale</Text>
+              <Text style={styles.menuSub}>Version {appVersion} · Terms & privacy</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={17} color="#D1D5DB" />
+          </TouchableOpacity>
+        </View>
+
+        {/* ── Log Out ── */}
+        <TouchableOpacity style={styles.logoutBtn} onPress={handleSignOut} activeOpacity={0.8}>
+          <Ionicons name="log-out-outline" size={18} color="#DC2626" />
+          <Text style={styles.logoutText}>Log Out</Text>
+        </TouchableOpacity>
+
+        <Text style={styles.versionText}>Pet Royale · v{appVersion}</Text>
 
         <View style={{ height: 32 }} />
       </ScrollView>
-
-      {/* ── Avatar Action Sheet ── */}
-      <Modal visible={showAvatarSheet} transparent animationType="slide">
-        <Pressable style={styles.sheetOverlay} onPress={() => setShowAvatarSheet(false)}>
-          <Pressable style={styles.actionSheet}>
-            <View style={styles.sheetHandle} />
-            <Text style={styles.sheetTitle}>Profile Photo</Text>
-
-            {avatarUrl && (
-              <TouchableOpacity
-                style={styles.previewWrap}
-                onPress={() => { setShowAvatarSheet(false); setShowImageViewer(true); }}
-                activeOpacity={0.9}
-              >
-                <Image source={{ uri: avatarUrl }} style={styles.previewImage} />
-                <View style={styles.previewOverlay}>
-                  <Icon name="expand-outline" emoji="🔍" size={18} color="#fff" />
-                  <Text style={styles.previewOverlayText}>View Full Photo</Text>
-                </View>
-              </TouchableOpacity>
-            )}
-
-            <TouchableOpacity style={styles.actionItem} onPress={pickImage} activeOpacity={0.7}>
-              <View style={[styles.actionItemIcon, { backgroundColor: '#eef1f8' }]}>
-                <Ionicons name="images-outline" size={16} color={NAVY} />
-              </View>
-              <Text style={styles.actionItemText}>Choose from Library</Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity style={styles.actionItem} onPress={takePhoto} activeOpacity={0.7}>
-              <View style={[styles.actionItemIcon, { backgroundColor: '#eef1f8' }]}>
-                <Ionicons name="camera-outline" size={16} color={NAVY} />
-              </View>
-              <Text style={styles.actionItemText}>Take a Photo</Text>
-            </TouchableOpacity>
-
-            {avatarUrl && (
-              <TouchableOpacity style={styles.actionItem} onPress={deleteAvatar} activeOpacity={0.7}>
-                <View style={[styles.actionItemIcon, { backgroundColor: '#fdecea' }]}>
-                  <Ionicons name="trash-outline" size={16} color="#c0392b" />
-                </View>
-                <Text style={[styles.actionItemText, { color: '#c0392b' }]}>Remove Photo</Text>
-              </TouchableOpacity>
-            )}
-
-            <TouchableOpacity style={styles.cancelBtn} onPress={() => setShowAvatarSheet(false)}>
-              <Text style={styles.cancelBtnText}>Cancel</Text>
-            </TouchableOpacity>
-          </Pressable>
-        </Pressable>
-      </Modal>
-
-      {/* ── Full Screen Image Viewer ── */}
-      <Modal visible={showImageViewer} transparent animationType="fade">
-        <View style={styles.viewerOverlay}>
-          <TouchableOpacity style={styles.viewerClose} onPress={() => setShowImageViewer(false)}>
-            <Ionicons name="close" size={22} color="#fff" />
-          </TouchableOpacity>
-          {avatarUrl && (
-            <Image source={{ uri: avatarUrl }} style={styles.viewerImage} resizeMode="contain" />
-          )}
-          <TouchableOpacity
-            style={styles.viewerChangeBtn}
-            onPress={() => { setShowImageViewer(false); setTimeout(() => setShowAvatarSheet(true), 300); }}
-          >
-            <Ionicons name="camera-outline" size={14} color={NAVY} />
-            <Text style={styles.viewerChangeBtnText}>Change Photo</Text>
-          </TouchableOpacity>
-        </View>
-      </Modal>
-    </>
+    </View>
   );
 }
 
@@ -351,107 +238,73 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: BG },
   loadingWrap: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: BG },
 
-  // Header — identical to HomeScreen
   header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    backgroundColor: NAVY,
-    paddingHorizontal: 16,
-    paddingTop: 16,
-    paddingBottom: 14,
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    backgroundColor: BG, paddingHorizontal: 18, paddingBottom: 14,
   },
-  headerBrand: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 9,
-  },
-  crownBox: {
-    width: 36,
-    height: 36,
-    borderRadius: 9,
-    backgroundColor: 'rgba(255,255,255,0.07)',
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.12)',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  brandName: {
-    color: '#fff',
-    fontSize: 14,
-    fontWeight: '700',
-    letterSpacing: -0.2,
-    lineHeight: 17,
-  },
-  brandSub: {
-    color: 'rgba(255,255,255,0.35)',
-    fontSize: 8.5,
-    fontWeight: '600',
-    letterSpacing: 1.2,
-    marginTop: 1,
+  headerTitle: { fontSize: 24, fontWeight: '800', color: INK, letterSpacing: -0.4 },
+  gearBtn: {
+    width: 40, height: 40, borderRadius: 20,
+    backgroundColor: '#fff', alignItems: 'center', justifyContent: 'center',
+    shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.06, shadowRadius: 4, elevation: 2,
   },
 
-  // Hero
-  hero: { backgroundColor: NAVY, alignItems: 'center', paddingBottom: 24, paddingHorizontal: 20, paddingTop: 20 },
-  avatarWrap: { marginBottom: 12 },
-  avatarInner: { width: 86, height: 86, borderRadius: 43, backgroundColor: GOLD, alignItems: 'center', justifyContent: 'center', borderWidth: 3, borderColor: 'rgba(255,255,255,0.2)' },
-  avatarImage: { width: 86, height: 86, borderRadius: 43, borderWidth: 3, borderColor: 'rgba(255,255,255,0.2)' },
-  avatarInitials: { fontSize: 32, fontWeight: '800', color: NAVY },
+  scrollContent: { paddingHorizontal: 18 },
 
-  heroName: { color: '#fff', fontSize: 20, fontWeight: '800', marginBottom: 3 },
-  heroEmail: { color: 'rgba(255,255,255,0.45)', fontSize: 12, marginBottom: 10 },
-  heroMeta: { gap: 4, alignItems: 'center', marginBottom: 14 },
-  heroMetaItem: { flexDirection: 'row', alignItems: 'center', gap: 5 },
-  heroMetaText: { color: 'rgba(255,255,255,0.55)', fontSize: 12 },
+  profileCard: {
+    flexDirection: 'row', alignItems: 'center', gap: 12,
+    backgroundColor: '#fff', borderRadius: 16, padding: 14, marginBottom: 20,
+    shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.05, shadowRadius: 6, elevation: 2,
+  },
+  avatar: { width: 52, height: 52, borderRadius: 26 },
+  avatarFallback: { width: 52, height: 52, borderRadius: 26, backgroundColor: TEAL, alignItems: 'center', justifyContent: 'center' },
+  avatarInitials: { fontSize: 19, fontWeight: '800', color: '#fff' },
+  profileName: { fontSize: 15.5, fontWeight: '800', color: INK, marginBottom: 2 },
+  profileEmail: { fontSize: 12, color: SUB, marginBottom: 6 },
+  verifiedPill: {
+    flexDirection: 'row', alignItems: 'center', gap: 4,
+    backgroundColor: TEAL_LIGHT, alignSelf: 'flex-start', paddingHorizontal: 8, paddingVertical: 3, borderRadius: 20,
+  },
+  verifiedPillText: { fontSize: 10.5, fontWeight: '700', color: TEAL },
 
-  heroBtnRow: { flexDirection: 'row', gap: 10, marginTop: 4 },
-  editBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: GOLD, paddingHorizontal: 16, paddingVertical: 8, borderRadius: 20 },
-  editBtnText: { color: NAVY, fontWeight: '700', fontSize: 13 },
+  sectionRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 },
+  sectionTitleLg: { fontSize: 16, fontWeight: '800', color: INK },
+  viewAllText: { fontSize: 12.5, fontWeight: '700', color: TEAL },
 
-  // Stats
-  statsRow: { flexDirection: 'row', backgroundColor: '#fff', marginHorizontal: 14, marginTop: 14, borderRadius: 12, borderWidth: 1, borderColor: CREAM_BORDER },
-  statCard: { flex: 1, alignItems: 'center', paddingVertical: 16, gap: 3 },
-  statDivider: { width: 1, backgroundColor: CREAM_BORDER, marginVertical: 12 },
-  statNumber: { fontSize: 26, fontWeight: '800', color: NAVY },
-  statLabel: { fontSize: 11, color: TAUPE, fontWeight: '500' },
+  petTilesRow: { flexDirection: 'row', gap: 10, marginBottom: 24 },
+  petTile: {
+    flex: 1, backgroundColor: '#fff', borderRadius: 16, padding: 12, alignItems: 'center',
+    shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.04, shadowRadius: 5, elevation: 1,
+  },
+  petTilePhoto: { width: 48, height: 48, borderRadius: 24, marginBottom: 8 },
+  petTilePhotoFallback: { width: 48, height: 48, borderRadius: 24, backgroundColor: TEAL_LIGHT, alignItems: 'center', justifyContent: 'center', marginBottom: 8 },
+  petTileName: { fontSize: 12.5, fontWeight: '700', color: INK },
+  petTileBreed: { fontSize: 10.5, color: SUB, marginTop: 1 },
+  addPetTile: {
+    flex: 1, borderRadius: 16, borderWidth: 1.5, borderColor: TEAL, borderStyle: 'dashed',
+    alignItems: 'center', justifyContent: 'center', paddingVertical: 18, gap: 4,
+  },
+  addPetTileText: { fontSize: 11.5, fontWeight: '700', color: TEAL },
 
-  // Section
-  section: { paddingHorizontal: 14, marginTop: 16 },
-  sectionTitle: { fontSize: 11, fontWeight: '700', color: TAUPE, letterSpacing: 1.5, textTransform: 'uppercase', marginBottom: 8 },
+  groupLabel: { fontSize: 11.5, fontWeight: '800', color: SUB, letterSpacing: 0.8, marginBottom: 8 },
 
-  // Card
-  card: { backgroundColor: '#fff', borderRadius: 12, borderWidth: 1, borderColor: CREAM_BORDER },
-  linkRow: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 14, paddingVertical: 13, gap: 12 },
-  linkIconWrap: { width: 32, height: 32, borderRadius: 8, backgroundColor: NAVY, alignItems: 'center', justifyContent: 'center' },
-  linkText: { flex: 1, fontSize: 13.5, fontWeight: '600', color: NAVY },
-  cardDivider: { height: 1, backgroundColor: CREAM_BORDER, marginHorizontal: 14 },
+  card: {
+    backgroundColor: '#fff', borderRadius: 16, marginBottom: 20, overflow: 'hidden',
+    shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.04, shadowRadius: 5, elevation: 1,
+  },
+  menuRow: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 14, paddingVertical: 13 },
+  menuIconWrap: { width: 38, height: 38, borderRadius: 19, backgroundColor: TEAL_LIGHT, alignItems: 'center', justifyContent: 'center' },
+  menuLabel: { fontSize: 14, fontWeight: '700', color: INK, marginBottom: 2 },
+  menuSub: { fontSize: 11.5, color: SUB },
+  cardDivider: { height: 1, backgroundColor: BORDER, marginLeft: 64 },
+  countBadge: { backgroundColor: BG, borderRadius: 10, paddingHorizontal: 8, paddingVertical: 3, marginRight: 4 },
+  countBadgeText: { fontSize: 11.5, fontWeight: '700', color: INK },
 
-  // Clinic Card
-  clinicCard: { backgroundColor: '#fff', borderRadius: 12, borderWidth: 1, borderColor: CREAM_BORDER, padding: 14 },
-  clinicRow: { paddingVertical: 8 },
-  clinicLabel: { fontSize: 10, fontWeight: '700', color: TAUPE, letterSpacing: 1, textTransform: 'uppercase', marginBottom: 3 },
-  clinicValue: { fontSize: 13, color: NAVY, fontWeight: '500' },
-  clinicDivider: { height: 1, backgroundColor: CREAM_BORDER },
-
-  // Action Sheet
-  sheetOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
-  actionSheet: { backgroundColor: '#fff', borderTopLeftRadius: 20, borderTopRightRadius: 20, padding: 20, paddingBottom: 32 },
-  sheetHandle: { width: 36, height: 4, borderRadius: 2, backgroundColor: CREAM_BORDER, alignSelf: 'center', marginBottom: 16 },
-  sheetTitle: { fontSize: 15, fontWeight: '800', color: NAVY, marginBottom: 14 },
-  previewWrap: { borderRadius: 12, overflow: 'hidden', marginBottom: 14, height: 180, position: 'relative' },
-  previewImage: { width: '100%', height: '100%' },
-  previewOverlay: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.3)', alignItems: 'center', justifyContent: 'center', gap: 6 },
-  previewOverlayText: { color: '#fff', fontSize: 13, fontWeight: '600' },
-  actionItem: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 11 },
-  actionItemIcon: { width: 36, height: 36, borderRadius: 9, alignItems: 'center', justifyContent: 'center' },
-  actionItemText: { fontSize: 14, fontWeight: '600', color: NAVY },
-  cancelBtn: { marginTop: 8, backgroundColor: BG, borderRadius: 10, paddingVertical: 13, alignItems: 'center', borderWidth: 1, borderColor: CREAM_BORDER },
-  cancelBtnText: { fontSize: 14, fontWeight: '700', color: TAUPE },
-
-  // Image Viewer
-  viewerOverlay: { flex: 1, backgroundColor: '#000', alignItems: 'center', justifyContent: 'center' },
-  viewerClose: { position: 'absolute', top: 52, right: 20, width: 36, height: 36, borderRadius: 18, backgroundColor: 'rgba(255,255,255,0.15)', alignItems: 'center', justifyContent: 'center', zIndex: 10 },
-  viewerImage: { width: '100%', height: '70%' },
-  viewerChangeBtn: { position: 'absolute', bottom: 52, flexDirection: 'row', alignItems: 'center', gap: 7, backgroundColor: GOLD, paddingHorizontal: 20, paddingVertical: 11, borderRadius: 20 },
-  viewerChangeBtnText: { color: NAVY, fontWeight: '700', fontSize: 14 },
+  logoutBtn: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
+    backgroundColor: '#fff', borderRadius: 16, paddingVertical: 15, marginBottom: 12,
+    shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.04, shadowRadius: 5, elevation: 1,
+  },
+  logoutText: { color: '#DC2626', fontWeight: '700', fontSize: 14 },
+  versionText: { fontSize: 11.5, color: SUB, textAlign: 'center' },
 });
