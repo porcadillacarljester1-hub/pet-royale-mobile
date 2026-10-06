@@ -1,17 +1,18 @@
 import { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, Switch, ScrollView, Alert, Linking } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, Switch, ScrollView, Alert } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Constants from 'expo-constants';
+import { colors } from '@/constants/theme';
 
-const TEAL = '#0D9488';
-const TEAL_LIGHT = '#CCFBF1';
-const BORDER = '#E5E7EB';
-const SUB = '#6B7280';
-const INK = '#111827';
-const BG = '#F4F7FB';
+const TEAL = colors.primary;
+const TEAL_LIGHT = colors.secondary;
+const BORDER = colors.border;
+const SUB = colors.mutedFg;
+const INK = colors.foreground;
+const BG = colors.background;
 
 const NOTIF_KEY = '@pet_royale_push_enabled';
 const UNIT_KEY = '@pet_royale_weight_unit';
@@ -26,19 +27,22 @@ export default function SettingsScreen() {
   const [loaded, setLoaded] = useState(false);
 
   useEffect(() => {
-    loadPreferences();
-  }, []);
+  let active = true;
 
-  const loadPreferences = async () => {
+  (async () => {
     try {
       const push = await AsyncStorage.getItem(NOTIF_KEY);
       const unit = await AsyncStorage.getItem(UNIT_KEY);
+      if (!active) return;
       if (push !== null) setPushEnabled(push === 'true');
       if (unit === 'lbs' || unit === 'kg') setWeightUnit(unit);
     } finally {
-      setLoaded(true);
+      if (active) setLoaded(true);
     }
-  };
+  })();
+
+  return () => { active = false; };
+}, []);
 
   const togglePush = async (value: boolean) => {
     setPushEnabled(value);

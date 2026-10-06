@@ -7,24 +7,25 @@
     "icon": "./assets/images/icon.png",
     "scheme": "petroyalemobile",
     "userInterfaceStyle": "light",
-    "newArchEnabled": true,
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "bundleIdentifier": "com.dosie.petroyale",
+      "infoPlist": { "ITSAppUsesNonExemptEncryption": false }
     },
     "android": {
+      "package": "com.dosie.petroyale",
+      "googleServicesFile": "./google-services.json",
       "userInterfaceStyle": "light",
       "adaptiveIcon": {
-        "backgroundColor": "#12175e",
+        "backgroundColor": "#051F42",
         "foregroundImage": "./assets/images/android-icon-foreground.png",
-        "backgroundImage": "./assets/images/android-icon-background.png",
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
       },
-      "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false,
-      "package": "com.dosie.petroyale"
+      "permissions": []
     },
     "web": {
-      "output": "static",
+      "output": "single",
       "favicon": "./assets/images/favicon.png",
       "bundler": "metro"
     },
@@ -32,18 +33,36 @@
       "expo-router",
       "expo-font",
       [
+        "expo-notifications",
+        {
+          "icon": "./assets/images/notification-icon.png",
+          "color": "#051F42"
+        }
+      ],
+      [
         "expo-splash-screen",
         {
           "image": "./assets/images/splash-icon.png",
-          "imageWidth": 200,
+          "imageWidth": 300,
           "resizeMode": "contain",
-          "backgroundColor": "#12175e",
+          "backgroundColor": "#051F42",
           "dark": {
-            "backgroundColor": "#12175e"
+            "backgroundColor": "#051F42"
           }
         }
       ],
-      "expo-secure-store"
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Pet Royale needs access to your photos so you can add a picture of your pet or your profile.",
+          "cameraPermission": "Pet Royale needs your camera so you can take a picture of your pet or your profile.",
+          "microphonePermission": false
+        }
+      ],
+      "expo-secure-store",
+      "expo-image",
+      "expo-status-bar",
+      "expo-web-browser"
     ],
     "experiments": {
       "typedRoutes": true,
@@ -55,6 +74,12 @@
         "projectId": "4cea9a7f-2e5d-4a62-912f-96e5ad1852d0"
       }
     },
-    "owner": "dosie"
+    "owner": "dosie",
+    "runtimeVersion": {
+      "policy": "appVersion"
+    },
+    "updates": {
+      "url": "https://u.expo.dev/4cea9a7f-2e5d-4a62-912f-96e5ad1852d0"
+    }
   }
 }

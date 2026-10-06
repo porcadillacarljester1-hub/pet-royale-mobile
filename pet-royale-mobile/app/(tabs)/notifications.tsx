@@ -8,6 +8,11 @@ import { Ionicons } from '@expo/vector-icons';
 import { supabase } from '@/lib/supabase';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { colors, text, space, radius, shadow, fonts, hitSlop } from '@/constants/theme';
+import { Skeleton } from '@/components/Skeleton';
+import { ScreenHeader } from '@/components/ScreenHeader';
+import { PillTabs } from '@/components/PillTabs';
+import { TAB_BAR_CLEARANCE } from './_layout';
 import {
   type AppNotification,
   getActionsForCategory,
@@ -15,62 +20,45 @@ import {
   deleteNotification,
   cancelAppointment,
   fetchAppointmentById,
-  fetchMedicationById,
-  markMedicationGiven,
-  snoozeReminder,
-  dismissReminder,
 } from '@/lib/notificationActions';
 
-const TEAL = '#0D9488';
-const TEAL_LIGHT = '#CCFBF1';
-const ORANGE = '#F97316';
-const ORANGE_LIGHT = '#FFEDD5';
-const PURPLE = '#7C3AED';
-const PURPLE_LIGHT = '#EDE9FE';
-const BLUE = '#2563EB';
-const BLUE_LIGHT = '#DBEAFE';
-const GOLD = '#D97706';
-const GOLD_LIGHT = '#FEF3C7';
-const BORDER = '#E5E7EB';
-const SUB = '#6B7280';
-const INK = '#111827';
-const BG = '#F4F7FB';
-
-const ADMIN_ONLY_TITLES = ['New Appointment Request'];
+const BORDER = colors.border;
+const SUB = colors.mutedFg;
+const INK = colors.foreground;
+const BG = colors.background;
 const CLINIC_ADDRESS = 'Calbayog City, Eastern Samar, Philippines';
 
-type FilterKey = 'all' | 'reminders' | 'appointments' | 'updates';
+type TabKey = 'all' | 'unread';
 
-function getFilterGroup(category: string | null): FilterKey {
-  if (category === 'appointment_upcoming' || category === 'appointment_confirmed') return 'appointments';
-  if (category === 'medication_reminder' || category === 'grooming_reminder' || category === 'vaccination_due' || category === 'stock_reminder') return 'reminders';
-  return 'updates';
+/* created_at is "timestamp without time zone", so Supabase returns it with
+   no zone marker and JS would read it as local time. Treat it as UTC.
+   If times look wrong by hours, remove the 'Z' handling here. */
+function parseDate(value: string): Date {
+  const hasZone = /([zZ]|[+-]\d{2}:?\d{2})$/.test(value);
+  return new Date(hasZone ? value : value.replace(' ', 'T') + 'Z');
 }
 
-function getCategoryVisual(category: string | null, type: string) {
-  switch (category) {
-    case 'appointment_upcoming': return { icon: 'notifications' as const, bg: ORANGE_LIGHT, fg: ORANGE };
-    case 'appointment_confirmed': return { icon: 'checkmark-circle' as const, bg: BLUE_LIGHT, fg: BLUE };
-    case 'medication_reminder': return { icon: 'medical' as const, bg: TEAL_LIGHT, fg: TEAL };
-    case 'grooming_reminder': return { icon: 'cut' as const, bg: PURPLE_LIGHT, fg: PURPLE };
-    case 'stock_reminder': return { icon: 'bag-handle' as const, bg: TEAL_LIGHT, fg: TEAL };
-    case 'vaccination_due': return { icon: 'shield-checkmark' as const, bg: GOLD_LIGHT, fg: GOLD };
-    default:
-      if (type === 'appointment') return { icon: 'calendar' as const, bg: TEAL_LIGHT, fg: TEAL };
-      if (type === 'inventory') return { icon: 'cube' as const, bg: ORANGE_LIGHT, fg: ORANGE };
-      if (type === 'client') return { icon: 'person' as const, bg: PURPLE_LIGHT, fg: PURPLE };
-      return { icon: 'notifications' as const, bg: '#F3F4F6', fg: SUB };
-  }
+function timeAgo(value: string): string {
+  const mins = Math.round((Date.now() - parseDate(value).getTime()) / 60000);
+  if (mins < 1) return 'less than a minute ago';
+  if (mins < 45) return `${mins} minute${mins === 1 ? '' : 's'} ago`;
+  if (mins < 90) return 'about 1 hour ago';
+  const hours = Math.round(mins / 60);
+  if (mins < 1440) return `about ${hours} hours ago`;
+  if (mins < 2520) return '1 day ago';
+  const days = Math.round(mins / 1440);
+  if (days < 30) return `${days} days ago`;
+  return parseDate(value).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
 }
 
-function getDateGroupLabel(dateStr: string): string {
-  const date = new Date(dateStr);
+function getDateGroupLabel(value: string): string {
+  const date = parseDate(value);
   const now = new Date();
   const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
   const startOfDate = new Date(date.getFullYear(), date.getMonth(), date.getDate());
   const diffDays = Math.round((startOfToday.getTime() - startOfDate.getTime()) / 86400000);
 
-  if (diffDays === 0) return 'Today';
+  if (diffDays <= 0) return 'Today';
   if (diffDays === 1) return 'Yesterday';
   if (diffDays <= 7) return 'This Week';
   return 'Earlier';
@@ -85,7 +73,7 @@ export default function NotificationsScreen() {
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [filter, setFilter] = useState<FilterKey>('all');
+  const [tab, setTab] = useState<TabKey>('all');
 
   const [selected, setSelected] = useState<AppNotification | null>(null);
   const [detailData, setDetailData] = useState<any>(null);
@@ -99,34 +87,64 @@ export default function NotificationsScreen() {
     const { data } = await (supabase as any)
       .from('notifications')
       .select('*')
-      .or(`client_user_id.eq.${user.id},type.eq.general`)
+      .eq('client_user_id', user.id)
+      .eq('type', 'appointment')
       .order('created_at', { ascending: false })
       .limit(50);
 
-    if (data) {
-      setNotifications(data.filter((n: any) => !ADMIN_ONLY_TITLES.includes(n.title)));
-    }
+    if (data) setNotifications(data);
     setIsLoading(false);
     setRefreshing(false);
   };
 
   useFocusEffect(useCallback(() => { fetchNotifications(); }, []));
 
+  // Live updates: refetch whenever one of this client's rows changes.
   useEffect(() => {
-    const channel = (supabase as any)
-      .channel('notifications-screen')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'notifications' }, () => fetchNotifications())
-      .subscribe();
-    return () => { supabase.removeChannel(channel); };
+    let active = true;
+    let channel: any;
+    (async () => {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user || !active) return;
+      channel = (supabase as any)
+        .channel(`notifications-${user.id}`)
+        .on(
+          'postgres_changes',
+          { event: '*', schema: 'public', table: 'notifications', filter: `client_user_id=eq.${user.id}` },
+          () => fetchNotifications(),
+        )
+        .subscribe();
+    })();
+    return () => {
+      active = false;
+      if (channel) supabase.removeChannel(channel);
+    };
   }, []);
+
+  const handleBack = () => {
+    if (router.canGoBack()) router.back();
+    else router.replace('/(tabs)/home' as any);
+  };
 
   const handleMarkAsRead = async (id: string) => {
     await markNotificationRead(id);
     setNotifications(prev => prev.map(n => n.id === id ? { ...n, is_read: true } : n));
   };
 
+  const handleMarkAllRead = async () => {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return;
+    await (supabase as any)
+      .from('notifications')
+      .update({ is_read: true })
+      .eq('client_user_id', user.id)
+      .eq('type', 'appointment')
+      .eq('is_read', false);
+    setNotifications(prev => prev.map(n => ({ ...n, is_read: true })));
+  };
+
   const handleDelete = (id: string) => {
-    Alert.alert('Delete Notification', 'Remove this notification?', [
+    Alert.alert('Delete notification', 'Remove this notification?', [
       { text: 'Cancel', style: 'cancel' },
       {
         text: 'Delete', style: 'destructive',
@@ -138,37 +156,16 @@ export default function NotificationsScreen() {
     ]);
   };
 
-  const formatItemTime = (dateStr: string, group: string) => {
-    const date = new Date(dateStr);
-    const time = date.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
-    if (group === 'Today') return time;
-    if (group === 'Yesterday') return `Yesterday, ${time}`;
-    return `${date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}, ${time}`;
-  };
-
-  // ── Open detail sheet, load whatever related record it needs ──
+  // ── Detail sheet ──
   const openDetail = async (n: AppNotification) => {
     setSelected(n);
     setDetailData(null);
     if (!n.is_read) handleMarkAsRead(n.id);
-
-    if (!n.related_type || !n.related_id) return;
+    if (n.related_type !== 'appointment' || !n.related_id) return;
 
     setLoadingDetail(true);
     try {
-      if (n.related_type === 'appointment') {
-        setDetailData(await fetchAppointmentById(n.related_id));
-      } else if (n.related_type === 'medication') {
-        setDetailData(await fetchMedicationById(n.related_id));
-      } else if (n.related_type === 'reminder') {
-        setDetailData({ id: n.related_id });
-      } else if (n.related_type === 'pet') {
-        const { data } = await (supabase as any).from('pets').select('*').eq('id', n.related_id).single();
-        setDetailData(data);
-      } else if (n.related_type === 'vaccination') {
-        const { data } = await (supabase as any).from('pet_vaccinations').select('*, pets(name)').eq('id', n.related_id).single();
-        setDetailData(data);
-      }
+      setDetailData(await fetchAppointmentById(n.related_id));
     } catch {
       setDetailData(null);
     } finally {
@@ -181,7 +178,6 @@ export default function NotificationsScreen() {
     setDetailData(null);
   };
 
-  // ── Handle each action key — real behavior per action ──
   const handleAction = async (actionKey: string) => {
     if (!selected) return;
     setActionLoading(actionKey);
@@ -194,14 +190,18 @@ export default function NotificationsScreen() {
 
         case 'cancel':
           if (selected.related_id) {
-            Alert.alert('Cancel Appointment', 'Are you sure you want to cancel this appointment?', [
-              { text: 'Keep It', style: 'cancel' },
+            Alert.alert('Cancel visit', 'Are you sure you want to cancel this visit?', [
+              { text: 'Keep it', style: 'cancel' },
               {
-                text: 'Cancel Appointment', style: 'destructive',
+                text: 'Cancel visit', style: 'destructive',
                 onPress: async () => {
-                  await cancelAppointment(selected.related_id!);
-                  closeDetail();
-                  Alert.alert('Cancelled', 'Your appointment has been cancelled.');
+                  try {
+                    await cancelAppointment(selected.related_id!);
+                    closeDetail();
+                    Alert.alert('Cancelled', 'Your visit has been cancelled.');
+                  } catch {
+                    Alert.alert('Could not cancel', 'This visit can no longer be cancelled.');
+                  }
                 },
               },
             ]);
@@ -211,165 +211,140 @@ export default function NotificationsScreen() {
         case 'reschedule':
           if (selected.related_id) {
             closeDetail();
-            router.push({ pathname: '/(tabs)/appointments', params: { reschedule: '1', appointmentId: selected.related_id } } as any);
+            router.push({
+              pathname: '/(tabs)/appointments',
+              params: { reschedule: '1', appointmentId: selected.related_id },
+            } as any);
           }
           break;
 
         case 'directions':
-          Linking.openURL(`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(CLINIC_ADDRESS)}`);
-          break;
-
-        case 'mark_given':
-          if (selected.related_id) {
-            await markMedicationGiven(selected.related_id);
-            closeDetail();
-            Alert.alert('Logged', 'Dose marked as given.');
-          }
-          break;
-
-        case 'snooze':
-          if (selected.related_id) {
-            await snoozeReminder(selected.related_id, 24);
-            closeDetail();
-            Alert.alert('Snoozed', "We'll remind you again in 24 hours.");
-          }
-          break;
-
-        case 'dismiss':
-          if (selected.related_id) {
-            await dismissReminder(selected.related_id);
-          }
-          closeDetail();
-          break;
-
-        case 'view_pet': {
-          const petId = detailData?.pet_id || detailData?.id || selected.related_id;
-          closeDetail();
-          if (petId) router.push({ pathname: '/pet-detail', params: { id: petId } } as any);
-          break;
-        }
-
-        case 'view_vaccination': {
-          const petId = detailData?.pet_id;
-          closeDetail();
-          if (petId) router.push({ pathname: '/pet-detail', params: { id: petId } } as any);
-          break;
-        }
-
-        case 'book_grooming':
-          closeDetail();
-          router.push({ pathname: '/(tabs)/appointments', params: { openBooking: '1', service: 'Grooming' } } as any);
+          Linking.openURL(
+            `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(CLINIC_ADDRESS)}`,
+          );
           break;
 
         case 'book_appointment':
           closeDetail();
           router.push({ pathname: '/(tabs)/appointments', params: { openBooking: '1' } } as any);
           break;
-
-        case 'shop':
-          closeDetail();
-          router.push('/(tabs)/products' as any);
-          break;
       }
     } catch {
-      Alert.alert('Error', 'Something went wrong. Please try again.');
+      Alert.alert('Something went wrong', 'Please try again.');
     } finally {
       setActionLoading(null);
     }
   };
 
-  const filtered = filter === 'all' ? notifications : notifications.filter(n => getFilterGroup(n.category) === filter);
+  const unreadCount = notifications.filter(n => !n.is_read).length;
+  const visible = tab === 'unread' ? notifications.filter(n => !n.is_read) : notifications;
 
-  // Group filtered notifications by date bucket, preserving GROUP_ORDER
   const grouped = GROUP_ORDER.map(group => ({
     group,
-    items: filtered.filter(n => getDateGroupLabel(n.created_at) === group),
+    items: visible.filter(n => getDateGroupLabel(n.created_at) === group),
   })).filter(g => g.items.length > 0);
 
   const actions = selected ? getActionsForCategory(selected.category) : [];
-  const selectedVisual = selected ? getCategoryVisual(selected.category, selected.type) : null;
 
   return (
     <View style={styles.container}>
-      <View style={[styles.header, { paddingTop: insets.top + 8 }]}>
-        <View style={styles.headerTop}>
-          <Text style={styles.headerTitle}>Notifications</Text>
-          <TouchableOpacity style={styles.gearBtn} onPress={() => router.push('/(tabs)/settings' as any)} activeOpacity={0.7}>
-            <Ionicons name="settings-outline" size={19} color={INK} />
-          </TouchableOpacity>
-        </View>
+      {/* ── Header ── The bell opens this, so it's called Notifications.
+          "Visits" is the name of the bookings tab. */}
+      <ScreenHeader title="Notifications" onBack={handleBack} bordered={false} />
 
-        <View style={styles.filterRow}>
-          {([
-            { key: 'all', label: 'All' },
-            { key: 'reminders', label: 'Reminders' },
-            { key: 'appointments', label: 'Appointments' },
-            { key: 'updates', label: 'Updates' },
-          ] as const).map(f => (
-            <TouchableOpacity
-              key={f.key}
-              style={[styles.filterPill, filter === f.key && styles.filterPillActive]}
-              onPress={() => setFilter(f.key)}
-              activeOpacity={0.8}
-            >
-              <Text style={[styles.filterPillText, filter === f.key && styles.filterPillTextActive]}>
-                {f.label}
-              </Text>
-            </TouchableOpacity>
-          ))}
-        </View>
+      <View style={styles.tabRow}>
+        <PillTabs
+          tabs={[
+            { key: 'all', label: 'Show all', count: notifications.length },
+            { key: 'unread', label: 'Unread', count: unreadCount },
+          ]}
+          value={tab}
+          onChange={setTab}
+        />
+        {unreadCount > 0 && (
+          <TouchableOpacity
+            onPress={handleMarkAllRead}
+            activeOpacity={0.7}
+            hitSlop={hitSlop}
+            style={styles.markAllRow}
+            accessibilityRole="button"
+          >
+            <Text style={styles.markAllText}>Mark all read</Text>
+          </TouchableOpacity>
+        )}
       </View>
 
+      {/* ── List ── */}
       {isLoading ? (
-        <ActivityIndicator size="large" color={TEAL} style={{ marginTop: 48 }} />
+        <NotificationsSkeleton />
       ) : (
         <ScrollView
           contentContainerStyle={grouped.length === 0 ? styles.emptyContainer : styles.scrollContent}
           showsVerticalScrollIndicator={false}
           refreshControl={
-            <RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); fetchNotifications(); }} tintColor={TEAL} />
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={() => { setRefreshing(true); fetchNotifications(); }}
+              tintColor={INK}
+            />
           }
         >
           {grouped.length === 0 ? (
             <View style={styles.empty}>
               <View style={styles.emptyIconWrap}>
-                <Ionicons name="notifications-off-outline" size={28} color="#fff" />
+                <Ionicons name="calendar-outline" size={28} color={SUB} />
               </View>
-              <Text style={styles.emptyTitle}>No notifications yet</Text>
-              <Text style={styles.emptyText}>Notifications about your appointments and pets will appear here.</Text>
+              <Text style={styles.emptyTitle}>
+                {tab === 'unread' ? 'Nothing unread' : 'No visit updates yet'}
+              </Text>
+              <Text style={styles.emptyText}>
+                {tab === 'unread'
+                  ? 'You have read every update.'
+                  : 'When the clinic confirms or completes a booking, it will show up here.'}
+              </Text>
             </View>
           ) : (
             grouped.map(({ group, items }) => (
               <View key={group} style={styles.dateSection}>
-                <Text style={styles.dateSectionTitle}>{group}</Text>
+                <View style={styles.dateHeader}>
+                  <Text style={styles.dateTitle}>{group}</Text>
+                  <View style={styles.countPill}>
+                    <Text style={styles.countText}>{items.length}</Text>
+                  </View>
+                </View>
+
+                {/* Tapping a card opens its details, with the "view
+                    appointment" action inside, so cards don't need a
+                    button of their own. Unread cards are lifted (white,
+                    shadow, bold); read ones sit flat and quiet. */}
                 {items.map(item => {
-                  const visual = getCategoryVisual(item.category, item.type);
                   const isUnread = !item.is_read;
                   return (
                     <TouchableOpacity
                       key={item.id}
-                      style={styles.item}
+                      style={[styles.card, isUnread && styles.cardUnread]}
                       onPress={() => openDetail(item)}
                       onLongPress={() => handleDelete(item.id)}
-                      activeOpacity={0.75}
+                      activeOpacity={0.8}
+                      accessibilityRole="button"
+                      accessibilityLabel={`${isUnread ? 'Unread. ' : ''}${item.title}. ${item.message}`}
                     >
-                      <View style={[styles.iconBubble, { backgroundColor: visual.bg }]}>
-                        <Ionicons name={visual.icon} size={19} color={visual.fg} />
-                      </View>
-
-                      <View style={styles.itemBody}>
-                        <View style={styles.itemTitleRow}>
-                          <Text style={styles.itemTitle} numberOfLines={1}>{item.title}</Text>
+                      <View style={styles.cardTop}>
+                        <View style={styles.cardTitleRow}>
                           {isUnread && <View style={styles.unreadDot} />}
+                          <Text
+                            style={[styles.cardTitle, isUnread && styles.cardTitleUnread]}
+                            numberOfLines={2}
+                          >
+                            {item.title}
+                          </Text>
                         </View>
-                        <Text style={styles.itemMessage} numberOfLines={2}>{item.message}</Text>
-                        <View style={styles.itemTimeRow}>
-                          <Ionicons name="time-outline" size={11} color="#9CA3AF" />
-                          <Text style={styles.itemTime}>{formatItemTime(item.created_at, group)}</Text>
-                        </View>
+                        <Text style={styles.cardTime}>{timeAgo(item.created_at)}</Text>
                       </View>
 
-                      <Ionicons name="chevron-forward" size={16} color="#D1D5DB" />
+                      <Text style={[styles.cardMessage, isUnread && styles.cardMessageUnread]}>
+                        {item.message}
+                      </Text>
                     </TouchableOpacity>
                   );
                 })}
@@ -379,39 +354,53 @@ export default function NotificationsScreen() {
         </ScrollView>
       )}
 
-      {/* ── Dynamic detail bottom sheet ── */}
+      {/* ── Detail sheet ── */}
       <Modal visible={!!selected} transparent animationType="slide" onRequestClose={closeDetail}>
         <View style={styles.sheetOverlay}>
           <TouchableOpacity style={{ flex: 1 }} activeOpacity={1} onPress={closeDetail} />
           <View style={styles.sheet}>
             <View style={styles.sheetHandle} />
 
-            {selected && selectedVisual && (
+            {selected && (
               <>
                 <View style={styles.sheetHeader}>
-                  <View style={[styles.sheetIconWrap, { backgroundColor: selectedVisual.bg }]}>
-                    <Ionicons name={selectedVisual.icon} size={22} color={selectedVisual.fg} />
+                  <View style={styles.sheetIconWrap}>
+                    <Ionicons name="calendar-outline" size={22} color={INK} />
                   </View>
                   <View style={{ flex: 1 }}>
                     <Text style={styles.sheetTitle}>{selected.title}</Text>
-                    {detailData?.pet_name || detailData?.pets?.name ? (
-                      <Text style={styles.sheetSub}>
-                        {detailData.pet_name || detailData.pets?.name}
-                        {selected.category === 'grooming_reminder' ? ' · Grooming' : ''}
-                      </Text>
-                    ) : null}
+                    <Text style={styles.sheetSub}>{timeAgo(selected.created_at)}</Text>
                   </View>
                   <TouchableOpacity style={styles.sheetCloseBtn} onPress={closeDetail}>
                     <Ionicons name="close" size={20} color={SUB} />
                   </TouchableOpacity>
                 </View>
 
-                <ScrollableDetailBody
-                  loading={loadingDetail}
-                  message={selected.message}
-                  detailData={detailData}
-                  category={selected.category}
-                />
+                {loadingDetail ? (
+                  <ActivityIndicator color={INK} style={{ marginVertical: 20 }} />
+                ) : (
+                  <View style={styles.detailBody}>
+                    <Text style={styles.detailMessage}>{selected.message}</Text>
+                    {detailData && (
+                      <View style={styles.detailInfoCard}>
+                        <View style={styles.detailInfoRow}>
+                          <Ionicons name="calendar-outline" size={15} color={SUB} />
+                          <Text style={styles.detailInfoText}>{detailData.requested_date}</Text>
+                        </View>
+                        {detailData.scheduled_time ? (
+                          <View style={styles.detailInfoRow}>
+                            <Ionicons name="time-outline" size={15} color={SUB} />
+                            <Text style={styles.detailInfoText}>{detailData.scheduled_time}</Text>
+                          </View>
+                        ) : null}
+                        <View style={styles.detailInfoRow}>
+                          <Ionicons name="paw-outline" size={15} color={SUB} />
+                          <Text style={styles.detailInfoText}>{detailData.service}</Text>
+                        </View>
+                      </View>
+                    )}
+                  </View>
+                )}
 
                 {actions.length > 0 && (
                   <View style={styles.actionsSection}>
@@ -436,7 +425,7 @@ export default function NotificationsScreen() {
                               <Text style={styles.actionLabel}>{a.label}</Text>
                               <Text style={styles.actionSublabel}>{a.sublabel}</Text>
                             </View>
-                            <Ionicons name="chevron-forward" size={16} color="#D1D5DB" />
+                            <Ionicons name="chevron-forward" size={16} color={SUB} />
                           </TouchableOpacity>
                           {i < actions.length - 1 && <View style={styles.actionDivider} />}
                         </View>
@@ -445,18 +434,7 @@ export default function NotificationsScreen() {
                   </View>
                 )}
 
-                {!selected.is_read && (
-                  <TouchableOpacity
-                    style={styles.markReadBtn}
-                    onPress={() => { handleMarkAsRead(selected.id); closeDetail(); }}
-                    activeOpacity={0.7}
-                  >
-                    <Ionicons name="checkmark" size={16} color={TEAL} />
-                    <Text style={styles.markReadBtnText}>Mark as read</Text>
-                  </TouchableOpacity>
-                )}
-
-                <View style={{ height: 12 }} />
+                <View style={{ height: 12 + insets.bottom }} />
               </>
             )}
           </View>
@@ -466,50 +444,35 @@ export default function NotificationsScreen() {
   );
 }
 
-function ScrollableDetailBody({ loading, message, detailData, category }: any) {
-  if (loading) {
-    return <ActivityIndicator color={TEAL} style={{ marginVertical: 20 }} />;
-  }
-
+/* Loading state: mirrors the real list (a date header, then cards with a
+   title and time and a two-line message), using the same styles so
+   nothing jumps when the content arrives. */
+function NotificationsSkeleton() {
   return (
-    <View style={styles.detailBody}>
-      <Text style={styles.detailMessage}>{message}</Text>
+    <View
+      style={styles.scrollContent}
+      accessibilityLabel="Loading notifications"
+      accessibilityLiveRegion="polite"
+    >
+      {[3, 2].map((count, g) => (
+        <View key={g} style={styles.dateSection}>
+          <View style={styles.dateHeader}>
+            <Skeleton width={72} height={14} />
+            <Skeleton width={22} height={22} radius={11} />
+          </View>
 
-      {category === 'appointment_upcoming' || category === 'appointment_confirmed' ? (
-        detailData && (
-          <View style={styles.detailInfoCard}>
-            <View style={styles.detailInfoRow}>
-              <Ionicons name="calendar-outline" size={15} color={SUB} />
-              <Text style={styles.detailInfoText}>{detailData.requested_date}</Text>
-            </View>
-            {detailData.scheduled_time && (
-              <View style={styles.detailInfoRow}>
-                <Ionicons name="time-outline" size={15} color={SUB} />
-                <Text style={styles.detailInfoText}>{detailData.scheduled_time}</Text>
+          {Array.from({ length: count }).map((_, i) => (
+            <View key={i} style={styles.card}>
+              <View style={styles.cardTop}>
+                <Skeleton width="50%" height={15} />
+                <Skeleton width={84} height={12} />
               </View>
-            )}
-            <View style={styles.detailInfoRow}>
-              <Ionicons name="paw-outline" size={15} color={SUB} />
-              <Text style={styles.detailInfoText}>{detailData.service}</Text>
+              <Skeleton width="100%" height={13} />
+              <Skeleton width="75%" height={13} />
             </View>
-          </View>
-        )
-      ) : null}
-
-      {category === 'medication_reminder' && detailData && (
-        <View style={styles.detailInfoCard}>
-          <View style={styles.detailInfoRow}>
-            <Ionicons name="medical-outline" size={15} color={SUB} />
-            <Text style={styles.detailInfoText}>{detailData.name} {detailData.dosage ? `· ${detailData.dosage}` : ''}</Text>
-          </View>
-          {detailData.scheduled_time && (
-            <View style={styles.detailInfoRow}>
-              <Ionicons name="time-outline" size={15} color={SUB} />
-              <Text style={styles.detailInfoText}>{detailData.scheduled_time}</Text>
-            </View>
-          )}
+          ))}
         </View>
-      )}
+      ))}
     </View>
   );
 }
@@ -517,89 +480,114 @@ function ScrollableDetailBody({ loading, message, detailData, category }: any) {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: BG },
 
-  header: {
-    backgroundColor: '#fff',
-    paddingHorizontal: 18,
-    paddingBottom: 12,
+  /* tabs (sit directly under the shared header) */
+  tabRow: {
+    paddingHorizontal: space.xl,
+    paddingTop: space.sm,
+    paddingBottom: space.md,
     borderBottomWidth: 1,
     borderBottomColor: BORDER,
-    gap: 12,
+    backgroundColor: BG,
   },
-  headerTop: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  headerTitle: { color: INK, fontSize: 24, fontWeight: '800', letterSpacing: -0.4 },
-  gearBtn: { width: 38, height: 38, borderRadius: 19, backgroundColor: BG, alignItems: 'center', justifyContent: 'center' },
+  markAllText: { ...text.smallBold, color: INK },
+  markAllRow: { alignSelf: 'flex-end', marginTop: space.sm },
 
-  filterRow: { flexDirection: 'row', gap: 8 },
-  filterPill: { paddingHorizontal: 14, paddingVertical: 7, borderRadius: 20, backgroundColor: BG },
-  filterPillActive: { backgroundColor: '#fff', borderWidth: 1.5, borderColor: TEAL },
-  filterPillText: { color: SUB, fontSize: 12, fontWeight: '600' },
-  filterPillTextActive: { color: TEAL, fontWeight: '700' },
-
-  scrollContent: { paddingHorizontal: 18, paddingTop: 16, paddingBottom: 24 },
-
-  dateSection: { marginBottom: 18 },
-  dateSectionTitle: { fontSize: 13, fontWeight: '800', color: INK, marginBottom: 8 },
-
-  item: {
-    flexDirection: 'row', alignItems: 'center', gap: 12,
-    backgroundColor: '#fff', borderRadius: 14, padding: 12, marginBottom: 9,
-    shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.04, shadowRadius: 5, elevation: 1,
+  countPill: {
+    minWidth: 22, height: 22, paddingHorizontal: 6, borderRadius: 11,
+    backgroundColor: colors.muted, alignItems: 'center', justifyContent: 'center',
   },
-  iconBubble: { width: 42, height: 42, borderRadius: 21, alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
-  itemBody: { flex: 1, gap: 3 },
-  itemTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  itemTitle: { fontSize: 13.5, fontWeight: '800', color: INK, flexShrink: 1 },
-  itemMessage: { fontSize: 12, color: SUB, lineHeight: 16.5 },
-  itemTimeRow: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 1 },
-  itemTime: { fontSize: 10.5, color: '#9CA3AF' },
-  unreadDot: { width: 7, height: 7, borderRadius: 3.5, backgroundColor: ORANGE },
+  countPillActive: { backgroundColor: colors.card, borderWidth: 1, borderColor: INK },
+  countText: { ...text.caption, fontSize: 12, color: INK },
 
+  /* list — clears the floating tab bar */
+  scrollContent: { paddingHorizontal: space.xl, paddingTop: space.lg, paddingBottom: TAB_BAR_CLEARANCE },
+  dateSection: { marginBottom: space.lg },
+  dateHeader: { flexDirection: 'row', alignItems: 'center', gap: space.sm, marginBottom: space.md },
+  dateTitle: { ...text.bodyBold, fontSize: 14, color: SUB },
+
+  /* Read cards recede: flat, same colour as the page, quieter text.
+     Unread cards stand out: white, lifted, bold title, darker message. */
+  card: {
+    backgroundColor: BG,
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    borderColor: BORDER,
+    padding: space.lg,
+    marginBottom: space.md,
+    gap: space.sm,
+  },
+  cardUnread: {
+    backgroundColor: colors.white,
+    borderColor: colors.input,
+    ...shadow.card,
+  },
+  cardTop: {
+  flexDirection: 'row',
+  flexWrap: 'wrap',
+  alignItems: 'flex-start',
+  justifyContent: 'space-between',
+  columnGap: space.md,
+  rowGap: 2,
+  },
+  cardTitleRow: {
+  flexDirection: 'row',
+  alignItems: 'center',
+  gap: space.sm,
+  flexGrow: 1,
+  flexShrink: 1,
+  minWidth: 160,
+  },
+  unreadDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: colors.primary },
+  cardTitle: { fontFamily: fonts.bodyMedium, fontSize: 15, lineHeight: 22, color: SUB, flexShrink: 1 },
+  cardTitleUnread: { fontFamily: fonts.bodyBold, color: INK },
+  cardTime: { ...text.caption, color: SUB, flexShrink: 0 },
+  cardMessage: { ...text.body, fontSize: 14, color: SUB, lineHeight: 20 },
+  cardMessageUnread: { color: INK },
+
+  /* empty */
   emptyContainer: { flex: 1, justifyContent: 'center' },
   empty: { alignItems: 'center', paddingHorizontal: 32, gap: 10 },
-  emptyIconWrap: { width: 68, height: 68, borderRadius: 34, backgroundColor: TEAL, alignItems: 'center', justifyContent: 'center', marginBottom: 4 },
-  emptyTitle: { fontSize: 16, fontWeight: '800', color: INK },
-  emptyText: { fontSize: 13, color: SUB, textAlign: 'center', lineHeight: 19 },
+  emptyIconWrap: {
+    width: 64, height: 64, borderRadius: radius.lg,
+    backgroundColor: colors.muted, alignItems: 'center', justifyContent: 'center', marginBottom: 4,
+  },
+  emptyTitle: { ...text.heading, fontSize: 16, color: INK },
+  emptyText: { ...text.body, fontSize: 13, color: SUB, textAlign: 'center', lineHeight: 19 },
 
-  /* ── Detail sheet ── */
+  /* detail sheet */
   sheetOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.45)', justifyContent: 'flex-end' },
   sheet: {
-    backgroundColor: '#fff', borderTopLeftRadius: 20, borderTopRightRadius: 20,
+    backgroundColor: colors.card, borderTopLeftRadius: 20, borderTopRightRadius: 20,
     paddingHorizontal: 20, paddingTop: 10, maxHeight: '85%',
   },
   sheetHandle: { width: 36, height: 4, borderRadius: 2, backgroundColor: BORDER, alignSelf: 'center', marginBottom: 14 },
   sheetHeader: { flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 16 },
-  sheetIconWrap: { width: 44, height: 44, borderRadius: 22, alignItems: 'center', justifyContent: 'center' },
-  sheetTitle: { fontSize: 16.5, fontWeight: '800', color: INK },
-  sheetSub: { fontSize: 12.5, color: SUB, marginTop: 2 },
-  sheetCloseBtn: { width: 32, height: 32, borderRadius: 16, backgroundColor: BG, alignItems: 'center', justifyContent: 'center' },
+  sheetIconWrap: {
+    width: 44, height: 44, borderRadius: radius.lg,
+    backgroundColor: colors.muted, alignItems: 'center', justifyContent: 'center',
+  },
+  sheetTitle: { ...text.heading, fontSize: 16.5, color: INK },
+  sheetSub: { ...text.caption, color: SUB, marginTop: 2 },
+  sheetCloseBtn: {
+    width: 32, height: 32, borderRadius: 16, backgroundColor: BG,
+    alignItems: 'center', justifyContent: 'center',
+  },
 
   detailBody: { marginBottom: 8 },
-  detailMessage: { fontSize: 13.5, color: INK, lineHeight: 20, marginBottom: 14 },
-  detailInfoCard: {
-    backgroundColor: BG, borderRadius: 12, padding: 12, gap: 9,
-  },
+  detailMessage: { ...text.body, fontSize: 13.5, color: INK, lineHeight: 20, marginBottom: 14 },
+  detailInfoCard: { backgroundColor: BG, borderRadius: 12, padding: 12, gap: 9 },
   detailInfoRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  detailInfoText: { fontSize: 12.5, color: INK, fontWeight: '500' },
+  detailInfoText: { ...text.body, fontSize: 12.5, color: INK },
 
   actionsSection: { marginTop: 6 },
-  actionsSectionTitle: {
-    fontSize: 11, fontWeight: '700', color: SUB,
-    letterSpacing: 0.8, textTransform: 'uppercase', marginBottom: 8,
-  },
+  actionsSectionTitle: { ...text.smallBold, color: SUB, marginBottom: 8 },
   actionsCard: {
-    backgroundColor: '#fff', borderRadius: 14, borderWidth: 1, borderColor: BORDER,
+    backgroundColor: colors.card, borderRadius: 14, borderWidth: 1, borderColor: BORDER,
     overflow: 'hidden',
   },
   actionRow: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 14, paddingVertical: 13 },
   actionIconWrap: { width: 36, height: 36, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
-  actionLabel: { fontSize: 13.5, fontWeight: '700', color: INK },
-  actionSublabel: { fontSize: 11, color: SUB, marginTop: 1 },
+  actionLabel: { ...text.bodyBold, fontSize: 13.5, color: INK },
+  actionSublabel: { ...text.caption, color: SUB, marginTop: 1 },
   actionDivider: { height: 1, backgroundColor: BORDER, marginLeft: 62 },
-
-  markReadBtn: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6,
-    marginTop: 14, paddingVertical: 12,
-    backgroundColor: TEAL_LIGHT, borderRadius: 12,
-  },
-  markReadBtnText: { color: TEAL, fontSize: 13, fontWeight: '700' },
 });

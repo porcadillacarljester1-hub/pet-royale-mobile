@@ -1,529 +1,859 @@
-import { useState, useCallback } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Image } from 'react-native';
+import { useState, useCallback, useEffect } from 'react';
+import {
+  View,
+  Text,
+  TouchableOpacity,
+  StyleSheet,
+  StatusBar,
+  Image,
+  RefreshControl,
+  ScrollView,
+  Animated,
+  AccessibilityInfo,
+} from 'react-native';
 import { useRouter, useFocusEffect } from 'expo-router';
-import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
-import { supabase } from '@/lib/supabase';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { supabase } from '../../lib/supabase';
+import {
+  Bell, CalendarPlus, Check, AlertCircle, Scissors, Activity, Stethoscope,
+} from 'lucide-react-native';
+import {
+  colors, text, space, radius, shadow, common, hitSlop, status,
+} from '../../constants/theme';
+import { useTabBarClearance } from './_layout';
+import { BrandWordmark } from '../../constants/brand';
+import { Skeleton, SkeletonRow } from '../../components/Skeleton';
+import { ReceiptModal } from '../../components/ReceiptModal';
+import { ProductCard, ProductCardSkeleton } from '../../components/ProductCard';
+import { peso, toLocalISO, fmtDate, fmtShortDate, fmtTime } from '../../lib/format';
+import { useRealtimeRefresh } from '../../lib/useRealtimeRefresh';
 
-const TEAL = '#0D9488';
-const TEAL_LIGHT = '#CCFBF1';
-const ORANGE = '#F97316';
-const ORANGE_LIGHT = '#FFEDD5';
-const PURPLE = '#7C3AED';
-const PURPLE_LIGHT = '#EDE9FE';
-const BG = '#F4F7FB';
-const INK = '#111827';
-const SUB = '#6B7280';
+function greeting() {
+  const h = new Date().getHours();
+  if (h < 12) return 'Good morning';
+  if (h < 18) return 'Good afternoon';
+  return 'Good evening';
+}
 
-const PET_CARD_COLORS = [
-  { bg: TEAL, badgeBg: 'rgba(255,255,255,0.22)' },
-  { bg: ORANGE, badgeBg: 'rgba(255,255,255,0.22)' },
-];
-
-const quickActions = [
-  { key: 'book', image: require('../../assets/quick_actions/book_appointment.png'), label: 'Book Appointment', route: '/(tabs)/appointments', params: { openBooking: '1'} },
-  { key: 'appointments', image: require('../../assets/quick_actions/my_appointments.png'), label: 'My Appointments', route: '/(tabs)/appointments', params: {} },
-  { key: 'pets', image: require('../../assets/quick_actions/my_pets.png'), label: 'My Pets', route: '/(tabs)/pets', params: {} },
-  { key: 'grooming', image: require('../../assets/quick_actions/grooming.png'), label: 'Grooming', route: '/(tabs)/appointments', params: { openBooking: '1', service: 'Grooming' } },
-  { key: 'essentials', image: require('../../assets/quick_actions/pet_essentials.png'), label: 'Pet Essentials', route: '/(tabs)/products', params: {} },
-  { key: 'reminders', image: require('../../assets/quick_actions/reminders.png'), label: 'Reminders', route: '/(tabs)/notifications', params: {} },
-];
-
-type HealthItem = {
-  id: string;
-  kind: 'vaccination' | 'note' | 'medication';
-  petId: string;
-  petName: string;
-  petPhoto: string | null;
-  title: string;
-  subtitle: string;
-  date: string;
+const STATUS_LABEL: Record<string, string> = {
+  incoming: 'Awaiting confirmation',
+  confirmed: 'Confirmed',
 };
+
+const STATUS_TONE: Record<string, keyof typeof status> = {
+  incoming: 'warning',
+  confirmed: 'teal',
+};
+
+/* Progress shown on the next-visit card. */
+const TRACK_STEPS = ['Requested', 'Confirmed', 'Visit'];
+const TRACK_INDEX: Record<string, number> = { incoming: 0, confirmed: 1 };
+
+/* Text and rules on the navy cards: the cream from the theme, softened. */
+const ON_NAVY_MUTED = 'rgba(246, 245, 238, 0.72)';
+const ON_NAVY_SOFT = 'rgba(246, 245, 238, 0.85)';
+const ON_NAVY_FAINT = 'rgba(246, 245, 238, 0.65)';
+const ON_NAVY_PANEL = 'rgba(255, 255, 255, 0.09)';
+const ON_NAVY_BTN = 'rgba(255, 255, 255, 0.12)';
+const ON_NAVY_TRACK = 'rgba(255, 255, 255, 0.2)';
+const ON_NAVY_DOT_RING = 'rgba(255, 255, 255, 0.35)';
+const ON_NAVY_RING = 'rgba(255, 255, 255, 0.05)';
+const AMBER = '#F4C46B';
+const SERVICE_TILE = '#E9A23B';
+
+/* A small icon per kind of service, falling back to a check. */
+function visitIcon(service: string) {
+  const s = (service || '').toLowerCase();
+  if (s.includes('groom')) return Scissors;
+  if (s.includes('emergency') || s.includes('confine')) return Activity;
+  if (s.includes('check') || s.includes('vet')) return Stethoscope;
+  return Check;
+}
+
+/* The status dot in the pill softly pulses while a visit awaits
+   confirmation; it holds still if the device asks for reduced motion. */
+function PulseDot({ color, pulse }: { color: string; pulse: boolean }) {
+  const [opacity] = useState(() => new Animated.Value(1));
+
+  useEffect(() => {
+    if (!pulse) {
+      opacity.setValue(1);
+      return;
+    }
+    let loop: Animated.CompositeAnimation | null = null;
+    let active = true;
+    AccessibilityInfo.isReduceMotionEnabled().then((reduce) => {
+      if (!active || reduce) return;
+      loop = Animated.loop(
+        Animated.sequence([
+          Animated.timing(opacity, { toValue: 0.25, duration: 900, useNativeDriver: true }),
+          Animated.timing(opacity, { toValue: 1, duration: 900, useNativeDriver: true }),
+        ]),
+      );
+      loop.start();
+    });
+    return () => {
+      active = false;
+      loop?.stop();
+    };
+  }, [pulse, opacity]);
+
+  return <Animated.View style={[styles.pillDot, { backgroundColor: color, opacity }]} />;
+}
 
 export default function HomeScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
+  const bottomPad = useTabBarClearance();
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [loadError, setLoadError] = useState(false);
   const [firstName, setFirstName] = useState('there');
   const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
+  const [nextVisit, setNextVisit] = useState<any>(null);
+  const [recentVisits, setRecentVisits] = useState<any[]>([]);
+  const [recentInvoices, setRecentInvoices] = useState<Record<string, any>>({});
+  const [receiptFor, setReceiptFor] = useState<any | null>(null);
+  const [products, setProducts] = useState<any[]>([]);
   const [pets, setPets] = useState<any[]>([]);
-  const [tasks, setTasks] = useState<any[]>([]);
-  const [healthItems, setHealthItems] = useState<HealthItem[]>([]);
+  // Unread count for the bell's badge. Same table and filters as the
+  // Notifications screen (client_user_id, type = 'appointment'), so the
+  // number here never disagrees with what's actually in that list.
+  const [unreadCount, setUnreadCount] = useState(0);
 
-  const loadData = async () => {
+  const loadData = useCallback(async () => {
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
+
+      const today = toLocalISO(new Date());
+      const [clientRes, nextRes, recentRes, productRes, petRes] = await Promise.all([
+        (supabase as any).from('clients').select('name').eq('id', user.id).maybeSingle(),
+        (supabase as any).from('appointments').select('*')
+          .eq('client_id', user.id)
+          .in('status', ['incoming', 'confirmed'])
+          .gte('requested_date', today)
+          .order('requested_date', { ascending: true })
+          .limit(1),
+        (supabase as any).from('appointments').select('*')
+          .eq('client_id', user.id)
+          .eq('status', 'completed')
+          .order('requested_date', { ascending: false })
+          .limit(3),
+        (supabase as any).from('products').select('*').eq('is_available', true).limit(8),
+        (supabase as any).from('pets').select('id, name, photo_url').eq('owner_id', user.id),
+      ]);
+      // The visits are what this screen is for; if they failed, say so.
+      // A failed products or name lookup just leaves those parts empty.
+      if (nextRes.error || recentRes.error) throw nextRes.error || recentRes.error;
+
+      const name = clientRes.data?.name || user.user_metadata?.full_name || '';
+      setFirstName(name.trim().split(/\s+/)[0] || 'there');
+      setAvatarUrl(user.user_metadata?.avatar_url || user.user_metadata?.picture || null);
+      setNextVisit(nextRes.data?.[0] || null);
+      setRecentVisits(recentRes.data || []);
+      setProducts(productRes.data || []);
+      // Pet photos are cosmetic: if this lookup fails the card falls back to the initial.
+      setPets(petRes?.data || []);
+
+      /* What each recent visit was billed. An invoice existing means it
+         is paid, so there's no balance to work out; the receipt fetches
+         its own line items and payments when it's opened. */
+      const recentIds = (recentRes.data || []).map((v: any) => v.id);
+      if (recentIds.length > 0) {
+        const { data: invs } = await (supabase as any)
+          .from('invoices')
+          .select('id, appointment_id, total_amount, created_at')
+          .in('appointment_id', recentIds);
+        const invMap: Record<string, any> = {};
+        (invs || []).forEach((i: any) => {
+          invMap[i.appointment_id] = {
+            id: i.id,
+            total: Number(i.total_amount || 0),
+            created_at: i.created_at,
+          };
+        });
+        setRecentInvoices(invMap);
+      } else {
+        setRecentInvoices({});
+      }
+      setLoadError(false);
+    } catch {
+      setLoadError(true);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  const fetchUnreadCount = useCallback(async () => {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) return;
 
-    const fullName = user.user_metadata?.full_name;
-    if (fullName) {
-      setFirstName(fullName.split(' ')[0]);
-    } else if (user.email) {
-      setFirstName(user.email.split('@')[0]);
-    }
-    setAvatarUrl(user.user_metadata?.avatar_url || null);
+    const { count } = await (supabase as any)
+      .from('notifications')
+      .select('*', { count: 'exact', head: true })
+      .eq('client_user_id', user.id)
+      .eq('type', 'appointment')
+      .eq('is_read', false);
 
-    const { data: petData } = await (supabase as any)
-      .from('pets')
-      .select('*')
-      .eq('owner_id', user.id)
-      .order('created_at', { ascending: false })
-      .limit(2);
-    setPets(petData || []);
+    setUnreadCount(count || 0);
+  }, []);
 
-    const { data: apptData } = await (supabase as any)
-      .from('appointments')
-      .select('*')
-      .eq('client_id', user.id.toString())
-      .neq('status', 'completed')
-      .order('requested_date', { ascending: true })
-      .limit(2);
-    setTasks(apptData || []);
+  useFocusEffect(useCallback(() => { loadData(); }, [loadData]));
+  useFocusEffect(useCallback(() => { fetchUnreadCount(); }, [fetchUnreadCount]));
 
-    // ── Pet Health Updates: vaccinations, health notes, medications across ALL pets ──
-    const { data: allPets } = await (supabase as any)
-      .from('pets')
-      .select('id, name, photo_url')
-      .eq('owner_id', user.id);
+  // Refresh the next visit, recent visits and receipts automatically
+  useRealtimeRefresh('appointments', loadData);
+  useRealtimeRefresh('invoices', loadData);
+  // Pet Essentials strip (stock or availability changes)
+  useRealtimeRefresh('products', loadData);
 
-    const petMap = new Map((allPets || []).map((p: any) => [p.id, p]));
-    const petIds = (allPets || []).map((p: any) => p.id);
-
-    if (petIds.length > 0) {
-      const [vaxRes, notesRes, medsRes] = await Promise.all([
-        (supabase as any)
-          .from('pet_vaccinations')
-          .select('*')
-          .in('pet_id', petIds)
-          .order('date_administered', { ascending: false })
-          .limit(3),
-        (supabase as any)
-          .from('pet_health_notes')
-          .select('*')
-          .in('pet_id', petIds)
-          .order('created_at', { ascending: false })
-          .limit(3),
-        (supabase as any)
-          .from('pet_medications')
-          .select('*')
-          .in('pet_id', petIds)
-          .eq('is_active', true)
-          .order('created_at', { ascending: false })
-          .limit(3),
-      ]);
-
-      const items: HealthItem[] = [];
-
-      (vaxRes.data || []).forEach((v: any) => {
-        const pet = petMap.get(v.pet_id) as any;
-        items.push({
-          id: `vax-${v.id}`,
-          kind: 'vaccination',
-          petId: v.pet_id,
-          petName: pet?.name || 'Pet',
-          petPhoto: pet?.photo_url || null,
-          title: v.vaccine_name,
-          subtitle: v.next_due_date
-            ? `Next due ${new Date(v.next_due_date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`
-            : 'Vaccination record',
-          date: v.date_administered,
-        });
-      });
-
-      (notesRes.data || []).forEach((n: any) => {
-        const pet = petMap.get(n.pet_id) as any;
-        items.push({
-          id: `note-${n.id}`,
-          kind: 'note',
-          petId: n.pet_id,
-          petName: pet?.name || 'Pet',
-          petPhoto: pet?.photo_url || null,
-          title: 'Health Note',
-          subtitle: n.note,
-          date: n.created_at,
-        });
-      });
-
-      (medsRes.data || []).forEach((m: any) => {
-        const pet = petMap.get(m.pet_id) as any;
-        items.push({
-          id: `med-${m.id}`,
-          kind: 'medication',
-          petId: m.pet_id,
-          petName: pet?.name || 'Pet',
-          petPhoto: pet?.photo_url || null,
-          title: m.name,
-          subtitle: m.scheduled_time ? `${m.dosage ? m.dosage + ' · ' : ''}${m.scheduled_time} daily` : (m.dosage || 'Active medication'),
-          date: m.created_at,
-        });
-      });
-
-      items.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
-      setHealthItems(items.slice(0, 4));
-    } else {
-      setHealthItems([]);
-    }
-  };
-
-  useFocusEffect(
-    useCallback(() => {
-      loadData();
-    }, [])
-  );
-
-  const formatTaskDate = (dateStr: string) => {
-    if (!dateStr) return { month: '—', day: '--' };
-    const d = new Date(dateStr);
-    return {
-      month: d.toLocaleDateString('en-US', { month: 'short' }).toUpperCase(),
-      day: d.getDate().toString(),
+  useEffect(() => {
+    let active = true;
+    let channel: any;
+    (async () => {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user || !active) return;
+      channel = (supabase as any)
+        .channel(`home-notifications-${user.id}`)
+        .on(
+          'postgres_changes',
+          { event: '*', schema: 'public', table: 'notifications', filter: `client_user_id=eq.${user.id}` },
+          () => fetchUnreadCount(),
+        )
+        .subscribe();
+    })();
+    return () => {
+      active = false;
+      if (channel) supabase.removeChannel(channel);
     };
+  }, [fetchUnreadCount]);
+
+  const onRefresh = async () => {
+    setRefreshing(true);
+    await loadData();
+    await fetchUnreadCount();
+    setRefreshing(false);
   };
 
-  const getHealthIconStyle = (kind: HealthItem['kind']) => {
-    switch (kind) {
-      case 'vaccination': return { icon: 'shield-checkmark' as const, color: TEAL, bg: TEAL_LIGHT };
-      case 'note': return { icon: 'document-text' as const, color: ORANGE, bg: ORANGE_LIGHT };
-      case 'medication': return { icon: 'medical' as const, color: PURPLE, bg: PURPLE_LIGHT };
-    }
-  };
+  if (loading) return <HomeSkeleton topInset={insets.top} />;
+
+  const nextTone = nextVisit ? status[STATUS_TONE[nextVisit.status] || 'neutral'] : null;
+  const nextTime = nextVisit ? fmtTime(nextVisit.scheduled_time) : '';
+  const nextDate = nextVisit ? fmtDate(nextVisit.requested_date, 'long') : '';
+  const trackOn = nextVisit ? (TRACK_INDEX[nextVisit.status] ?? 0) : 0;
+  const nextPet = nextVisit
+    ? pets.find((p) => p.id && p.id === nextVisit.pet_id)
+      || pets.find((p) => (p.name || '').trim().toLowerCase() === (nextVisit.pet_name || '').trim().toLowerCase())
+    : null;
+  const nextPetPhoto: string | null = nextPet?.photo_url || null;
+  const goVisits = () => router.push('/(tabs)/appointments' as any);
 
   return (
-    <ScrollView style={styles.container} showsVerticalScrollIndicator={false}>
-      {/* ── Header ── */}
-      <View style={[styles.header, { paddingTop: insets.top + 12 }]}>
-        <View style={{ flex: 1 }}>
-          <Text style={styles.greeting}>Hello, {firstName}!</Text>
-          <Text style={styles.headline}>How can we care{'\n'}for your pet today?</Text>
-        </View>
-        <View style={styles.headerIcons}>
+    <View style={styles.container}>
+      <StatusBar barStyle="dark-content" backgroundColor={colors.background} />
+
+      <ScrollView
+        contentContainerStyle={[styles.scroll, { paddingBottom: bottomPad }]}
+        showsVerticalScrollIndicator={false}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+            tintColor={colors.primary}
+            progressViewOffset={insets.top}
+          />
+        }
+      >
+        {/* ── Header: photo, greeting, bell ── */}
+        <View style={[styles.header, { paddingTop: insets.top + space.md }]}>
           <TouchableOpacity
-            style={styles.bellBtn}
-            onPress={() => router.push('/(tabs)/notifications' as any)}
-            activeOpacity={0.8}
-          >
-            <Ionicons name="notifications-outline" size={20} color={INK} />
-            <View style={styles.bellDot} />
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={styles.avatarBtn}
             onPress={() => router.push('/(tabs)/profile' as any)}
             activeOpacity={0.8}
+            accessibilityRole="button"
+            accessibilityLabel="Your profile"
           >
             {avatarUrl ? (
-              <Image source={{ uri: avatarUrl }} style={styles.avatarImage} />
+              <Image source={{ uri: avatarUrl }} style={styles.avatar} />
             ) : (
-              <Ionicons name="person" size={18} color="#fff" />
+              <View style={styles.avatarFallback}>
+                <Text style={styles.avatarInitial}>
+                  {firstName[0]?.toUpperCase() || '?'}
+                </Text>
+              </View>
+            )}
+          </TouchableOpacity>
+
+          <View style={styles.greetingWrap}>
+            <Text style={styles.greetingSmall} numberOfLines={1} maxFontSizeMultiplier={1.2}>
+              {greeting()}
+            </Text>
+            <Text style={styles.greetingName} numberOfLines={2} maxFontSizeMultiplier={1.2}>
+              {firstName}
+            </Text>
+          </View>
+
+          <TouchableOpacity
+            style={styles.iconBtn}
+            onPress={() => router.push('/(tabs)/notifications' as any)}
+            activeOpacity={0.7}
+            hitSlop={hitSlop}
+            accessibilityRole="button"
+            accessibilityLabel={unreadCount > 0 ? `Notifications, ${unreadCount} unread` : 'Notifications'}
+          >
+            <Bell size={18} color={colors.foreground} />
+            {unreadCount > 0 && (
+              <View style={styles.notifBadge}>
+                <Text style={styles.notifBadgeText} numberOfLines={1}>
+                  {unreadCount > 9 ? '9+' : unreadCount}
+                </Text>
+              </View>
             )}
           </TouchableOpacity>
         </View>
-      </View>
 
-      {/* ── My Pets ── */}
-      <View style={styles.section}>
-        <View style={styles.sectionHeaderRow}>
-          <Text style={styles.sectionTitle}>My Pets</Text>
-          <TouchableOpacity onPress={() => router.push('/(tabs)/pets' as any)} style={styles.viewAllRow}>
-            <Text style={styles.viewAll}>View all</Text>
-            <Ionicons name="chevron-forward" size={14} color={TEAL} />
-          </TouchableOpacity>
-        </View>
-
-        {pets.length === 0 ? (
-          <TouchableOpacity
-            style={styles.emptyPetsCard}
-            onPress={() => router.push('/(tabs)/pets' as any)}
-            activeOpacity={0.85}
-          >
-            <MaterialCommunityIcons name="dog" size={22} color={TEAL} />
-            <Text style={styles.emptyPetsText}>Add your first pet</Text>
-          </TouchableOpacity>
-        ) : (
-          <View style={styles.petsRow}>
-            {pets.map((pet, idx) => {
-              const c = PET_CARD_COLORS[idx % 2];
-              return (
-                <TouchableOpacity
-                  key={pet.id}
-                  style={[styles.petCard, { backgroundColor: c.bg }]}
-                  onPress={() => router.push({ pathname: '/pet-detail', params: { id: pet.id } } as any)}
-                  activeOpacity={0.85}
-                >
-                  <View style={styles.petCardTop}>
-                    {pet.photo_url ? (
-                      <Image source={{ uri: pet.photo_url }} style={styles.petPhoto} />
-                    ) : (
-                      <View style={styles.petAvatarWrap}>
-                        <MaterialCommunityIcons name="dog" size={22} color="#fff" />
-                      </View>
-                    )}
-                    <Ionicons name="chevron-forward" size={16} color="rgba(255,255,255,0.85)" />
-                  </View>
-                  <Text style={styles.petName}>{pet.name}</Text>
-                  <Text style={styles.petMeta}>
-                    {pet.species}{pet.age ? ` · ${pet.age} yrs` : ''}
-                  </Text>
-                  <View style={[styles.healthyBadge, { backgroundColor: c.badgeBg }]}>
-                    <Ionicons name="heart" size={10} color="#fff" />
-                    <Text style={styles.healthyBadgeText}>Healthy</Text>
-                  </View>
-                </TouchableOpacity>
-              );
-            })}
-          </View>
-        )}
-      </View>
-
-      {/* ── Quick Actions ── */}
-      <View style={styles.section}>
-        <Text style={styles.sectionTitle}>Quick Actions</Text>
-        <View style={styles.quickGrid}>
-          {quickActions.map((action) => (
-            <TouchableOpacity
-              key={action.key}
-              style={styles.quickCard}
-              onPress={() => router.push({ pathname: action.route, params: action.params } as any)}
-              activeOpacity={0.85}
-            >
-              <Image source={action.image} style={styles.quickImage} />
-              <Text style={styles.quickLabel}>{action.label}</Text>
+        {loadError && (
+          <View style={styles.loadError} accessibilityLiveRegion="polite">
+            <AlertCircle size={15} color={status.danger.fg} strokeWidth={2} />
+            <Text style={styles.loadErrorText}>Couldn&apos;t load your visits.</Text>
+            <TouchableOpacity onPress={onRefresh} hitSlop={hitSlop} accessibilityRole="button">
+              <Text style={styles.loadErrorRetry}>Retry</Text>
             </TouchableOpacity>
-          ))}
-        </View>
-      </View>
-
-      {/* ── Pet Health Updates ── */}
-      <View style={styles.section}>
-        <View style={styles.sectionHeaderRow}>
-          <Text style={styles.sectionTitle}>Pet Health Updates</Text>
-        </View>
-
-        {healthItems.length === 0 ? (
-          <View style={styles.emptyTasksCard}>
-            <Ionicons name="medkit-outline" size={20} color={SUB} />
-            <Text style={styles.emptyTasksText}>No health records yet</Text>
           </View>
-        ) : (
-          healthItems.map((item) => {
-            const iconStyle = getHealthIconStyle(item.kind);
-            return (
-              <TouchableOpacity
-                key={item.id}
-                style={styles.healthRow}
-                onPress={() => router.push({ pathname: '/pet-detail', params: { id: item.petId } } as any)}
-                activeOpacity={0.85}
-              >
-                <View style={[styles.healthIconWrap, { backgroundColor: iconStyle!.bg }]}>
-                  <Ionicons name={iconStyle!.icon} size={18} color={iconStyle!.color} />
-                </View>
-                <View style={{ flex: 1 }}>
-                  <View style={styles.healthTitleRow}>
-                    <Text style={styles.healthTitle}>{item.title}</Text>
-                    <Text style={styles.healthPetName}>{item.petName}</Text>
-                  </View>
-                  <Text style={styles.healthSub} numberOfLines={1}>{item.subtitle}</Text>
-                </View>
-                {item.petPhoto ? (
-                  <Image source={{ uri: item.petPhoto }} style={styles.healthPetThumb} />
+        )}
+
+        {/* ── Next visit ── */}
+        {nextVisit && nextTone ? (
+          <View style={styles.visitCard} accessibilityLabel="Next visit">
+            <View style={styles.visitRing} pointerEvents="none" />
+
+            <View style={styles.visitTop}>
+              <Text style={styles.visitEyebrow} maxFontSizeMultiplier={1.15}>Next visit</Text>
+              <View style={[common.pill, styles.statusPill, { backgroundColor: nextTone.bg }]}>
+                <PulseDot color={nextTone.fg} pulse={nextVisit.status === 'incoming'} />
+                <Text
+                  style={[common.pillText, { color: nextTone.fg }]}
+                  maxFontSizeMultiplier={1.15}
+                >
+                  {STATUS_LABEL[nextVisit.status] || nextVisit.status}
+                </Text>
+              </View>
+            </View>
+
+            <View style={styles.visitTimeRow}>
+              <Text style={styles.visitTime} maxFontSizeMultiplier={1.2}>
+                {nextTime || nextDate}
+              </Text>
+              {nextTime ? (
+                <Text style={styles.visitDay} maxFontSizeMultiplier={1.2}>{nextDate}</Text>
+              ) : null}
+            </View>
+
+            <View style={styles.svcPanel}>
+              <View style={styles.svcTile}>
+                {nextPetPhoto ? (
+                  <Image
+                    source={{ uri: nextPetPhoto }}
+                    style={styles.svcPhoto}
+                    accessibilityLabel={`Photo of ${nextVisit.pet_name}`}
+                  />
                 ) : (
-                  <View style={[styles.healthPetThumb, styles.healthPetThumbFallback]}>
-                    <MaterialCommunityIcons name="dog" size={14} color={TEAL} />
-                  </View>
+                  <Text style={styles.svcTileText}>
+                    {nextVisit.pet_name?.[0]?.toUpperCase() || '?'}
+                  </Text>
                 )}
+              </View>
+              <View style={styles.svcCopy}>
+                <Text style={styles.visitService} numberOfLines={2}>{nextVisit.service}</Text>
+                <Text style={styles.visitPet} numberOfLines={1}>{nextVisit.pet_name}</Text>
+              </View>
+            </View>
+
+            <View style={styles.track} accessibilityLabel={`Status: ${TRACK_STEPS[trackOn]}`}>
+              <View style={styles.trackLine} />
+              {TRACK_STEPS.map((label, i) => {
+                const on = i === trackOn;
+                const align = i === 0 ? 'flex-start' : i === TRACK_STEPS.length - 1 ? 'flex-end' : 'center';
+                return (
+                  <View key={label} style={[styles.trackStep, { alignItems: align }]}>
+                    <View style={[styles.trackDot, on && styles.trackDotOn]} />
+                    <Text
+                      style={[styles.trackLabel, on && styles.trackLabelOn]}
+                      maxFontSizeMultiplier={1.15}
+                    >
+                      {label}
+                    </Text>
+                  </View>
+                );
+              })}
+            </View>
+
+            <View style={styles.visitBtns}>
+              <TouchableOpacity
+                style={styles.visitBtn}
+                onPress={goVisits}
+                activeOpacity={0.8}
+                accessibilityRole="button"
+                accessibilityLabel="Cancel visit"
+              >
+                <Text style={styles.visitBtnText} maxFontSizeMultiplier={1.15}>Cancel</Text>
               </TouchableOpacity>
-            );
-          })
-        )}
-      </View>
-
-      {/* ── Upcoming Tasks ── */}
-      <View style={[styles.section, { marginBottom: 24 }]}>
-        <View style={styles.sectionHeaderRow}>
-          <Text style={styles.sectionTitle}>Upcoming Tasks</Text>
-          <TouchableOpacity onPress={() => router.push('/(tabs)/appointments' as any)} style={styles.viewAllRow}>
-            <Text style={styles.viewAll}>View all</Text>
-            <Ionicons name="chevron-forward" size={14} color={TEAL} />
-          </TouchableOpacity>
-        </View>
-
-        {tasks.length === 0 ? (
-          <View style={styles.emptyTasksCard}>
-            <Ionicons name="calendar-outline" size={20} color={SUB} />
-            <Text style={styles.emptyTasksText}>No upcoming tasks</Text>
+              <TouchableOpacity
+                style={[styles.visitBtn, styles.visitBtnMain]}
+                onPress={goVisits}
+                activeOpacity={0.8}
+                accessibilityRole="button"
+                accessibilityLabel="Next visit, view details"
+              >
+                <Text style={[styles.visitBtnText, styles.visitBtnMainText]} maxFontSizeMultiplier={1.15}>
+                  View details
+                </Text>
+              </TouchableOpacity>
+            </View>
           </View>
         ) : (
-          tasks.map((task, idx) => {
-            const { month, day } = formatTaskDate(task.requested_date);
-            const badgeColor = idx % 2 === 0 ? ORANGE : TEAL;
-            return (
-              <TouchableOpacity
-                key={task.id}
-                style={styles.taskRow}
-                onPress={() => router.push('/(tabs)/appointments' as any)}
-                activeOpacity={0.85}
-              >
-                <View style={[styles.taskDateBadge, { backgroundColor: badgeColor }]}>
-                  <Text style={styles.taskDateMonth}>{month}</Text>
-                  <Text style={styles.taskDateDay}>{day}</Text>
-                </View>
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.taskTitle}>{task.service}</Text>
-                  <Text style={styles.taskSub}>
-                    {task.pet_name}
-                    {task.scheduled_time ? ` · ${task.scheduled_time}` : ''}
-                  </Text>
-                </View>
-                <View style={styles.taskPetThumb}>
-                  <MaterialCommunityIcons name="shopping-outline" size={16} color={TEAL} />
-                </View>
-                <Ionicons name="chevron-forward" size={16} color="#D1D5DB" />
-              </TouchableOpacity>
-            );
-          })
+          /* The card doesn't repeat a headline: just the brand and the action. */
+          <TouchableOpacity
+            style={styles.bookCard}
+            onPress={() => router.push('/(tabs)/book' as any)}
+            activeOpacity={0.9}
+            accessibilityRole="button"
+            accessibilityLabel="Book a visit"
+          >
+            <BrandWordmark height={20} color={colors.accent} />
+            <View style={styles.bookBtn}>
+              <CalendarPlus size={17} color={colors.primary} />
+              <Text style={styles.bookBtnText}>Book a visit</Text>
+            </View>
+          </TouchableOpacity>
         )}
-      </View>
-    </ScrollView>
+
+        {/* ── Pet Essentials ── */}
+        {products.length > 0 && (
+          <>
+            <View style={styles.sectionHead}>
+              <Text style={styles.sectionTitle}>Pet Essentials</Text>
+              <TouchableOpacity
+                onPress={() => router.push('/(tabs)/products' as any)}
+                activeOpacity={0.7}
+                hitSlop={hitSlop}
+                accessibilityRole="button"
+                accessibilityLabel="Shop all products"
+              >
+                <Text style={styles.sectionLink}>Shop all</Text>
+              </TouchableOpacity>
+            </View>
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={styles.productStrip}
+            >
+              {products.map((product) => (
+                <ProductCard
+                  key={product.id}
+                  product={product}
+                  style={styles.stripCard}
+                  hideHealthyStock
+                  onPress={() => router.push('/(tabs)/products' as any)}
+                />
+              ))}
+            </ScrollView>
+          </>
+        )}
+
+        {/* ── Recent visits ── */}
+        {recentVisits.length > 0 && (
+          <>
+            <View style={styles.sectionHead}>
+              <Text style={styles.sectionTitle}>Recent visits</Text>
+              <TouchableOpacity
+                onPress={goVisits}
+                activeOpacity={0.7}
+                hitSlop={hitSlop}
+                accessibilityRole="button"
+                accessibilityLabel="See all visits"
+              >
+                <Text style={styles.sectionLink}>See all</Text>
+              </TouchableOpacity>
+            </View>
+            <View style={styles.visitList}>
+              {recentVisits.map((visit, i) => {
+                const invoice = recentInvoices[visit.id];
+                const Icon = visitIcon(visit.service);
+                return (
+                  <TouchableOpacity
+                    key={visit.id}
+                    style={[styles.visitRow, i === recentVisits.length - 1 && styles.visitRowLast]}
+                    onPress={() => invoice ? setReceiptFor(visit) : goVisits()}
+                    activeOpacity={0.7}
+                    accessibilityRole="button"
+                    accessibilityLabel={
+                      invoice
+                        ? `${visit.service} for ${visit.pet_name}, view receipt`
+                        : `${visit.service} for ${visit.pet_name}`
+                    }
+                  >
+                    <View style={styles.visitRowIcon}>
+                      <Icon size={17} color={status.success.fg} strokeWidth={2} />
+                    </View>
+                    <View style={styles.visitRowCopy}>
+                      <Text
+                        style={styles.visitRowService}
+                        numberOfLines={2}
+                        maxFontSizeMultiplier={1.15}
+                      >
+                        {visit.service}
+                      </Text>
+                      <Text
+                        style={styles.visitRowMeta}
+                        numberOfLines={1}
+                        maxFontSizeMultiplier={1.15}
+                      >
+                        {visit.pet_name} · {fmtShortDate(visit.requested_date)} · Completed
+                      </Text>
+                    </View>
+                    {invoice && (
+                      <Text style={styles.visitRowAmount} maxFontSizeMultiplier={1.15}>
+                        {peso(invoice.total)}
+                      </Text>
+                    )}
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+          </>
+        )}
+      </ScrollView>
+
+      {receiptFor && (
+        <ReceiptModal
+          visit={receiptFor}
+          invoice={recentInvoices[receiptFor.id]}
+          onClose={() => setReceiptFor(null)}
+        />
+      )}
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: BG },
+  container: { ...common.screen },
+  scroll: { paddingHorizontal: space.xl },
 
-  /* ── Header ── */
+  /* Header scrolls with the page: photo · greeting · bell */
   header: {
     flexDirection: 'row',
-    alignItems: 'flex-start',
-    justifyContent: 'space-between',
-    paddingHorizontal: 18,
-    paddingBottom: 10,
+    alignItems: 'center',
+    gap: space.md,
+    paddingBottom: 0,
   },
-  greeting: { fontSize: 13, color: SUB, marginBottom: 4, fontWeight: '500' },
-  headline: { fontSize: 22, fontWeight: '800', color: INK, lineHeight: 28, letterSpacing: -0.4 },
-  headerIcons: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  bellBtn: {
-    width: 40, height: 40, borderRadius: 20,
-    backgroundColor: '#fff',
-    alignItems: 'center', justifyContent: 'center',
-    shadowColor: '#000', shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.06, shadowRadius: 4, elevation: 2,
-  },
-  bellDot: {
-    position: 'absolute', top: 8, right: 9,
-    width: 7, height: 7, borderRadius: 3.5,
-    backgroundColor: ORANGE, borderWidth: 1.5, borderColor: '#fff',
-  },
-  avatarBtn: {
-    width: 40, height: 40, borderRadius: 20,
-    backgroundColor: TEAL,
-    alignItems: 'center', justifyContent: 'center',
-    overflow: 'hidden',
-  },
-  avatarImage: { width: 40, height: 40, borderRadius: 20 },
-
-  /* ── Section shell ── */
-  section: { paddingHorizontal: 18, marginTop: 20 },
-  sectionHeaderRow: {
-    flexDirection: 'row', alignItems: 'center',
-    justifyContent: 'space-between', marginBottom: 12,
-  },
-  sectionTitle: { fontSize: 17, fontWeight: '800', color: INK, letterSpacing: -0.2, marginBottom: 12 },
-  viewAllRow: { flexDirection: 'row', alignItems: 'center', gap: 2 },
-  viewAll: { fontSize: 12.5, fontWeight: '700', color: TEAL },
-
-  /* ── My Pets ── */
-  petsRow: { flexDirection: 'row', gap: 10 },
-  petCard: {
-    flex: 1, borderRadius: 18, padding: 14, minHeight: 150,
-    justifyContent: 'flex-end',
-  },
-  petCardTop: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 },
-  petAvatarWrap: {
-    width: 46, height: 46, borderRadius: 23,
-    backgroundColor: 'rgba(255,255,255,0.25)',
-    alignItems: 'center', justifyContent: 'center',
-  },
-  petPhoto: { width: 46, height: 46, borderRadius: 23, borderWidth: 2, borderColor: 'rgba(255,255,255,0.6)' },
-  petName: { fontSize: 17, fontWeight: '800', color: '#fff', marginBottom: 2 },
-  petMeta: { fontSize: 12, color: 'rgba(255,255,255,0.85)', marginBottom: 10 },
-  healthyBadge: {
-    flexDirection: 'row', alignItems: 'center', gap: 4,
-    alignSelf: 'flex-start',
-    paddingHorizontal: 10, paddingVertical: 5,
+  avatar: { width: 40, height: 40, borderRadius: 20, backgroundColor: colors.muted },
+  avatarFallback: {
+    width: 40,
+    height: 40,
     borderRadius: 20,
+    backgroundColor: colors.secondary,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
-  healthyBadgeText: { fontSize: 11, fontWeight: '700', color: '#fff' },
-
-  emptyPetsCard: {
-    flexDirection: 'row', alignItems: 'center', gap: 10,
-    backgroundColor: '#fff', borderRadius: 14,
-    borderWidth: 1.5, borderColor: '#dde3ef', borderStyle: 'dashed',
-    padding: 16, justifyContent: 'center',
+  avatarInitial: {
+    ...text.title,
+    fontSize: 16,
+    lineHeight: 20,
+    letterSpacing: 0,
+    color: colors.secondaryFg,
   },
-  emptyPetsText: { fontSize: 13, fontWeight: '600', color: TEAL },
+  greetingWrap: { flex: 1, minWidth: 0 },
+  greetingSmall: { ...text.small, fontSize: 12, lineHeight: 16, color: colors.mutedFg },
+  greetingName: {
+    ...text.title,
+    fontSize: 20,
+    lineHeight: 24,
+    letterSpacing: -0.3,
+    color: colors.foreground,
+  },
+  iconBtn: {
+    position: 'relative',
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.card,
+    borderWidth: 1,
+    borderColor: colors.cardBorder,
+  },
+  notifBadge: {
+    position: 'absolute',
+    top: -4,
+    right: -4,
+    minWidth: 17,
+    height: 17,
+    paddingHorizontal: 3,
+    borderRadius: 8.5,
+    backgroundColor: status.danger.fg,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 2,
+    borderColor: colors.background,
+  },
+  notifBadgeText: {
+    fontSize: 10,
+    lineHeight: 12,
+    fontFamily: text.bodyBold?.fontFamily,
+    fontWeight: '700',
+    color: '#fff',
+  },
 
-  /* ── Quick Actions ── */
-  quickGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
-  quickCard: {
-    width: '31%',
-    backgroundColor: '#fff',
-    borderRadius: 16,
+  loadError: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: space.sm,
+    backgroundColor: status.danger.bg,
+    borderRadius: radius.md,
+    padding: space.md,
+    marginTop: space.md,
+  },
+  loadErrorText: { ...text.small, color: status.danger.fg, flex: 1 },
+  loadErrorRetry: { ...text.smallBold, color: status.danger.fg, textDecorationLine: 'underline' },
+
+  /* ── Next visit card ── */
+  visitCard: {
+    marginTop: space.md,
+    backgroundColor: colors.primary,
+    borderRadius: 22,
+    padding: 16,
     overflow: 'hidden',
-    shadowColor: '#000', shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.05, shadowRadius: 5, elevation: 2,
+    ...shadow.primary,
   },
-  quickImage: {
-    width: '100%',
-    height: 90,
+  visitRing: {
+    position: 'absolute',
+    right: -24,
+    bottom: -32,
+    width: 120,
+    height: 120,
+    borderRadius: 60,
+    borderWidth: 18,
+    borderColor: ON_NAVY_RING,
   },
-  quickLabel: {
-    fontSize: 11.5, fontWeight: '700', color: INK,
-    textAlign: 'center', lineHeight: 14,
-    paddingVertical: 10, paddingHorizontal: 4,
+  visitTop: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: space.sm,
+  },
+  visitEyebrow: { ...text.small, fontSize: 12, lineHeight: 16, color: ON_NAVY_MUTED },
+  statusPill: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  pillDot: { width: 7, height: 7, borderRadius: 3.5 },
+  visitTimeRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    alignItems: 'baseline',
+    columnGap: 8,
+    marginTop: 10,
+    marginBottom: 10,
+  },
+  visitTime: {
+    ...text.display,
+    fontSize: 30,
+    lineHeight: 34,
+    letterSpacing: -0.6,
+    color: colors.primaryFg,
+  },
+  visitDay: { ...text.body, fontSize: 13, lineHeight: 18, color: ON_NAVY_SOFT },
+
+  svcPanel: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    padding: 10,
+    borderRadius: 14,
+    backgroundColor: ON_NAVY_PANEL,
+  },
+  svcTile: {
+    width: 40,
+    height: 40,
+    borderRadius: 12,
+    backgroundColor: SERVICE_TILE,
+    alignItems: 'center',
+    justifyContent: 'center',
+    overflow: 'hidden',
+  },
+  svcPhoto: { width: '100%', height: '100%' },
+  svcTileText: {
+    ...text.title,
+    fontSize: 15,
+    lineHeight: 19,
+    letterSpacing: 0,
+    color: '#fff',
+  },
+  svcCopy: { flex: 1, minWidth: 0 },
+  visitService: { ...text.bodyBold, fontSize: 14, lineHeight: 18, color: colors.primaryFg },
+  visitPet: { ...text.small, fontSize: 12, lineHeight: 16, color: ON_NAVY_SOFT },
+
+  track: { flexDirection: 'row', marginTop: 12, marginBottom: 2, marginHorizontal: 2 },
+  trackLine: {
+    position: 'absolute',
+    left: 7,
+    right: 7,
+    top: 6,
+    height: 2,
+    backgroundColor: ON_NAVY_TRACK,
+  },
+  trackStep: { flex: 1, gap: 4 },
+  trackDot: {
+    width: 14,
+    height: 14,
+    borderRadius: 7,
+    backgroundColor: colors.primary,
+    borderWidth: 2,
+    borderColor: ON_NAVY_DOT_RING,
+  },
+  trackDotOn: { backgroundColor: AMBER, borderColor: AMBER },
+  trackLabel: { ...text.caption, fontSize: 10.5, lineHeight: 14, color: ON_NAVY_FAINT },
+  trackLabelOn: { ...text.smallBold, fontSize: 10.5, lineHeight: 14, color: '#fff' },
+
+  visitBtns: { flexDirection: 'row', gap: 8, marginTop: 12 },
+  visitBtn: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 9,
+    borderRadius: 12,
+    backgroundColor: ON_NAVY_BTN,
+  },
+  visitBtnMain: { backgroundColor: colors.primaryFg },
+  visitBtnText: { ...text.bodyBold, fontSize: 13, lineHeight: 18, color: colors.primaryFg },
+  visitBtnMainText: { color: colors.primary },
+
+  bookCard: {
+    marginTop: space.lg,
+    backgroundColor: colors.primary,
+    borderRadius: radius.card,
+    padding: space.xl,
+    alignItems: 'flex-start',
+    ...shadow.primary,
+  },
+  bookBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: space.sm,
+    alignSelf: 'flex-start',
+    marginTop: space.xl,
+    paddingHorizontal: space.xl,
+    paddingVertical: space.md,
+    borderRadius: radius.pill,
+    backgroundColor: colors.primaryFg,
+  },
+  bookBtnText: { ...text.bodyBold, color: colors.primary },
+
+  sectionHead: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginTop: 20,
+    marginBottom: 10,
+  },
+  sectionTitle: { ...text.section, fontSize: 18, lineHeight: 24, color: colors.foreground },
+  sectionLink: { ...text.smallBold, fontSize: 13, lineHeight: 18, color: colors.primary },
+
+  /* ── Recent visits ── */
+  visitList: {
+    ...common.card,
+    padding: 0,
+    overflow: 'hidden',
+  },
+  visitRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: space.md,
+    paddingHorizontal: space.lg,
+    paddingVertical: 11,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border,
+  },
+  visitRowLast: { borderBottomWidth: 0 },
+  visitRowIcon: {
+    width: 36,
+    height: 36,
+    borderRadius: 12,
+    backgroundColor: status.success.bg,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  visitRowCopy: { flex: 1, minWidth: 0 },
+  visitRowService: { ...text.bodyBold, fontSize: 14, lineHeight: 18, color: colors.foreground },
+  visitRowMeta: { ...text.caption, fontSize: 11.5, lineHeight: 15, color: colors.mutedFg, marginTop: 1 },
+  visitRowAmount: {
+    ...text.bodyBold,
+    fontSize: 14,
+    lineHeight: 18,
+    color: colors.foreground,
+    fontVariant: ['tabular-nums'],
+    flexShrink: 0,
   },
 
-  /* ── Pet Health Updates ── */
-  healthRow: {
-    flexDirection: 'row', alignItems: 'center', gap: 12,
-    backgroundColor: '#fff', borderRadius: 16,
-    padding: 13, marginBottom: 10,
-    shadowColor: '#000', shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.05, shadowRadius: 5, elevation: 2,
-  },
-  healthIconWrap: {
-    width: 40, height: 40, borderRadius: 20,
-    alignItems: 'center', justifyContent: 'center',
-  },
-  healthTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 3 },
-  healthTitle: { fontSize: 13.5, fontWeight: '800', color: INK },
-  healthPetName: { fontSize: 11, color: SUB, fontWeight: '600' },
-  healthSub: { fontSize: 12, color: SUB },
-  healthPetThumb: { width: 30, height: 30, borderRadius: 15 },
-  healthPetThumbFallback: { backgroundColor: TEAL_LIGHT, alignItems: 'center', justifyContent: 'center' },
-
-  /* ── Upcoming Tasks ── */
-  taskRow: {
-    flexDirection: 'row', alignItems: 'center', gap: 12,
-    backgroundColor: '#fff', borderRadius: 16,
-    padding: 13, marginBottom: 10,
-    shadowColor: '#000', shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.05, shadowRadius: 5, elevation: 2,
-  },
-  taskDateBadge: {
-    width: 50, height: 50, borderRadius: 12,
-    alignItems: 'center', justifyContent: 'center',
-  },
-  taskDateMonth: { fontSize: 9, fontWeight: '700', color: '#fff', letterSpacing: 0.5 },
-  taskDateDay: { fontSize: 18, fontWeight: '800', color: '#fff', marginTop: 1 },
-  taskTitle: { fontSize: 14.5, fontWeight: '800', color: INK, marginBottom: 3 },
-  taskSub: { fontSize: 12, color: SUB },
-  taskPetThumb: {
-    width: 34, height: 34, borderRadius: 17,
-    backgroundColor: TEAL_LIGHT,
-    alignItems: 'center', justifyContent: 'center',
-  },
-
-  emptyTasksCard: {
-    flexDirection: 'row', alignItems: 'center', gap: 8,
-    backgroundColor: '#fff', borderRadius: 14,
-    padding: 16, justifyContent: 'center',
-  },
-  emptyTasksText: { fontSize: 13, color: SUB, fontWeight: '500' },
+  productStrip: { gap: space.sm, paddingRight: space.xl, paddingBottom: space.sm },
+  stripCard: { width: 122 },
 });
+
+/* ── Loading state ──
+   Everything that depends on the network is a placeholder shaped like
+   the loaded page: header, hero card, product strip and visits list. */
+function HomeSkeleton({ topInset }: { topInset: number }) {
+  const bottomPad = useTabBarClearance();
+  return (
+    <View
+      style={styles.container}
+      accessibilityLabel="Loading home"
+      accessibilityLiveRegion="polite"
+    >
+      <StatusBar barStyle="dark-content" backgroundColor={colors.background} />
+
+      <ScrollView
+        scrollEnabled={false}
+        contentContainerStyle={[styles.scroll, { paddingBottom: bottomPad }]}
+        showsVerticalScrollIndicator={false}
+      >
+        <View style={[styles.header, { paddingTop: topInset + space.md }]}>
+          <Skeleton width={40} height={40} radius={20} />
+          <View style={styles.greetingWrap}>
+            <Skeleton width={90} height={12} />
+            <View style={{ height: 6 }} />
+            <Skeleton width={110} height={20} />
+          </View>
+          <Skeleton width={40} height={40} radius={20} />
+        </View>
+
+        <View style={{ marginTop: space.md }}>
+          <Skeleton width="100%" height={210} radius={22} />
+        </View>
+
+        <View style={styles.sectionHead}>
+          <Skeleton width={120} height={20} />
+          <Skeleton width={56} height={14} />
+        </View>
+        <View style={{ flexDirection: 'row', gap: space.md, overflow: 'hidden' }}>
+          {[0, 1, 2].map((i) => (
+            <ProductCardSkeleton key={i} style={styles.stripCard} />
+          ))}
+        </View>
+
+        <View style={styles.sectionHead}>
+          <Skeleton width={110} height={20} />
+          <Skeleton width={48} height={14} />
+        </View>
+        <View style={styles.visitList}>
+          {[0, 1, 2].map((i) => (
+            <SkeletonRow
+              key={i}
+              tile={36}
+              style={[styles.visitRow, i === 2 && styles.visitRowLast]}
+            />
+          ))}
+        </View>
+      </ScrollView>
+    </View>
+  );
+}

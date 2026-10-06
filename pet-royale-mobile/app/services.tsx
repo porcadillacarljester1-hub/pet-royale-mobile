@@ -1,358 +1,334 @@
-import React, { useEffect, useRef } from 'react';
+import { useEffect, useState } from 'react';
 import {
   View,
   Text,
   TouchableOpacity,
   StyleSheet,
-  ScrollView,
   Animated,
   StatusBar,
+  InteractionManager,
 } from 'react-native';
 import { router } from 'expo-router';
+import {
+  Stethoscope,
+  Syringe,
+  HeartPulse,
+  ShieldAlert,
+  Scissors,
+  ArrowLeft,
+  Clock,
+  PawPrint,
+} from 'lucide-react-native';
+import { colors, text, space, radius, common, hitSlop } from '../constants/theme';
+import { Skeleton } from '../components/Skeleton';
 
-const NAVY = '#12175e';
-const GOLD = '#c9a227';
-const CREAM = '#f5f0e8';
-const CREAM_BORDER = '#e8e0cc';
-const TAUPE = '#8a7d5a';
+/* What each service is, in a sentence or two, plus a few practical
+   things worth knowing before you come in. No prices: they vary by
+   weight and by what the vet finds on the day, and a number here that
+   doesn't match the invoice is worse than no number.
 
+   `points` and `note` are optional. Only claims that hold for any vet
+   clinic are kept here. Add specifics (which vaccines, whether surgery
+   is by appointment, grooming prices) once the clinic confirms them. */
 const SERVICES = [
   {
     id: '01',
     title: 'Veterinary Check-ups',
-    blurb: 'Full physical assessments, diagnostics & expert consultations.',
+    Icon: Stethoscope,
+    blurb:
+      'For routine visits, and for the times something just seems off. The vet examines your pet, tells you what they found, and what to do next.',
+    points: ['Tell us what you\u2019ve noticed at home: appetite, energy, stool'],
   },
   {
     id: '02',
     title: 'Vaccination & Deworming',
-    blurb: 'Scheduled vaccines and deworming programs for every life stage.',
+    Icon: Syringe,
+    blurb:
+      'Vaccines and deworming on schedule, so nothing gets missed. Puppies and kittens start young and need a few rounds, a few weeks apart.',
+    points: ['Bring your pet\u2019s vaccine card so we can pick up where you left off'],
   },
   {
     id: '03',
     title: 'Minor & Major Surgeries',
-    blurb: 'Routine to complex procedures with skilled surgical care.',
+    Icon: HeartPulse,
+    blurb:
+      'Minor and major procedures. Your pet is seen first, so you know what\u2019s involved before the day.',
   },
   {
     id: '04',
     title: 'Confinement & Emergency Care',
-    blurb: '24/7 emergency response and overnight confinement facilities.',
+    Icon: ShieldAlert,
+    blurb:
+      'For pets that need to stay with us to be watched and treated, and for emergencies.',
+    note: 'If it\u2019s urgent, call the clinic. Don\u2019t wait for an appointment.',
   },
   {
     id: '05',
     title: 'Grooming',
-    blurb: 'Bath, trim, nail care & styling — your pet, looking their best.',
+    Icon: Scissors,
+    blurb:
+      'Bath, blow-dry and haircut. Tell the groomer how you like it, or bring a photo.',
   },
-];
+] as {
+  id: string;
+  title: string;
+  Icon: typeof Stethoscope;
+  blurb: string;
+  points?: string[];
+  note?: string;
+}[];
 
 export default function ServicesScreen() {
-  const fadeHeader = useRef(new Animated.Value(0)).current;
-  const itemAnims = useRef(SERVICES.map(() => new Animated.Value(0))).current;
+  /* useState with a lazy initializer keeps each Animated.Value stable
+     across renders without reading a ref during render (which the
+     React Compiler lint rule flags). */
+  const [scrollY] = useState(() => new Animated.Value(0));
+  const [fadeContent] = useState(() => new Animated.Value(0));
+
+  /* The list is bundled with the app, so there is nothing to download.
+     Rendering it is deferred until the screen's opening transition has
+     finished, and the skeleton fills that moment. If the services ever
+     move to Supabase, replace `ready` with that fetch's loading state
+     and the rest stays as it is. */
+  const [ready, setReady] = useState(false);
+  useEffect(() => {
+    const task = InteractionManager.runAfterInteractions(() => setReady(true));
+    return () => task.cancel();
+  }, []);
 
   useEffect(() => {
-    Animated.timing(fadeHeader, { toValue: 1, duration: 400, useNativeDriver: true }).start();
-    SERVICES.forEach((_, i) => {
-      Animated.timing(itemAnims[i], {
-        toValue: 1,
-        duration: 350,
-        delay: 150 + i * 80,
-        useNativeDriver: true,
-      }).start();
-    });
-  }, []);
+    if (ready) {
+      Animated.timing(fadeContent, { toValue: 1, duration: 350, useNativeDriver: true }).start();
+    }
+  }, [ready]);
+
+  /* The header border only appears once you've scrolled, so the screen
+     opens clean and gains structure as you move down it. */
+  const headerBorder = scrollY.interpolate({
+    inputRange: [0, 40],
+    outputRange: [0, 1],
+    extrapolate: 'clamp',
+  });
 
   return (
     <View style={styles.container}>
-      <StatusBar barStyle="dark-content" backgroundColor={CREAM} />
+      <StatusBar barStyle="dark-content" backgroundColor={colors.background} />
 
-      {/* Header */}
-      <Animated.View style={[styles.header, { opacity: fadeHeader }]}>
+      <Animated.View style={[styles.header, { borderBottomWidth: headerBorder }]}>
         <TouchableOpacity
           style={styles.backBtn}
           onPress={() => router.back()}
           activeOpacity={0.7}
+          hitSlop={hitSlop}
+          accessibilityRole="button"
+          accessibilityLabel="Go back"
         >
-          <Text style={styles.backArrow}>←</Text>
-          <Text style={styles.backLabel}>Back</Text>
+          <ArrowLeft size={17} color={colors.foreground} />
         </TouchableOpacity>
-
-        <View style={styles.headerTitles}>
-          <Text style={styles.headerTitle}>
-            Our{' '}
-            <Text style={styles.headerTitleItalic}>Services</Text>
-          </Text>
-          <Text style={styles.headerSub}>Pet Royale` Clinic & Veterinary</Text>
-        </View>
-
-        {/* Crown badge */}
-        <View style={styles.crownBadge}>
-          <Text style={styles.crownChar}>♛</Text>
-        </View>
+        <Text style={styles.headerTitle}>Services</Text>
+        {/* Balances the back button so the title sits centred. */}
+        <View style={styles.headerSpacer} />
       </Animated.View>
 
-      {/* Service list */}
-      <ScrollView
-        style={styles.list}
+      <Animated.ScrollView
+        contentContainerStyle={styles.scroll}
         showsVerticalScrollIndicator={false}
-        contentContainerStyle={{ paddingBottom: 120 }}
+        onScroll={Animated.event(
+          [{ nativeEvent: { contentOffset: { y: scrollY } } }],
+          { useNativeDriver: false }
+        )}
+        scrollEventThrottle={16}
       >
-        {SERVICES.map((item, i) => (
-          <Animated.View
-            key={item.id}
-            style={[
-              styles.serviceItem,
-              i === SERVICES.length - 1 && styles.serviceItemLast,
-              {
-                opacity: itemAnims[i],
-                transform: [{
-                  translateX: itemAnims[i].interpolate({
-                    inputRange: [0, 1],
-                    outputRange: [-16, 0],
-                  }),
-                }],
-              },
-            ]}
-          >
-            <Text style={styles.serviceNum}>{item.id}</Text>
-            <View style={styles.serviceInfo}>
-              <Text style={styles.serviceName}>{item.title}</Text>
-              <Text style={styles.serviceBlurb}>{item.blurb}</Text>
+        {!ready ? (
+          <ServicesSkeleton />
+        ) : (
+          <Animated.View style={{ opacity: fadeContent }}>
+            {SERVICES.map(({ id, title, Icon, blurb, points, note }, i) => (
+              <View
+                key={id}
+                style={[styles.service, i === SERVICES.length - 1 && styles.serviceLast]}
+              >
+                <View style={styles.serviceHead}>
+                  <View style={styles.iconTile}>
+                    <Icon size={19} color={colors.primary} strokeWidth={1.9} />
+                  </View>
+                  <Text style={styles.serviceTitle}>{title}</Text>
+                </View>
+
+                <View style={styles.body}>
+                  <Text style={styles.blurb}>{blurb}</Text>
+
+                  {points && points.length > 0 && (
+                    <View style={styles.points}>
+                      {points.map((line) => (
+                        <View key={line} style={styles.pointRow}>
+                          <View style={styles.pointDot} />
+                          <Text style={styles.pointText}>{line}</Text>
+                        </View>
+                      ))}
+                    </View>
+                  )}
+                </View>
+
+                {note && (
+                  <View style={styles.noteRow}>
+                    <Clock size={13} color={colors.mutedFg} />
+                    <Text style={styles.noteText}>{note}</Text>
+                  </View>
+                )}
+              </View>
+            ))}
+
+            <View style={styles.footMark}>
+              <PawPrint size={14} color={colors.border} />
             </View>
-            <Text style={styles.serviceArrow}>→</Text>
           </Animated.View>
-        ))}
-      </ScrollView>
+        )}
+      </Animated.ScrollView>
+    </View>
+  );
+}
 
-      {/* Footer CTA */}
-      <View style={styles.footer}>
-        {/* Book Appointment */}
-        <TouchableOpacity
-          style={styles.btnBook}
-          onPress={() => router.push('/register')}
-          activeOpacity={0.85}
+/* ── Loading state ──
+   Same rows as the real list (icon tile and title, a two-line blurb, a
+   couple of short points), so nothing jumps when the content appears. */
+function ServicesSkeleton() {
+  return (
+    <View accessibilityLabel="Loading services" accessibilityLiveRegion="polite">
+      {[0, 1, 2, 3, 4].map((i) => (
+        <View
+          key={i}
+          style={[styles.service, i === 4 && styles.serviceLast]}
         >
-          <Text style={styles.btnBookLabel}>Book Appointment</Text>
-          <View style={styles.btnBookRight}>
-            <Text style={styles.btnBookHint}>Get started</Text>
-            <View style={styles.btnBookArrowBox}>
-              <Text style={styles.btnBookArrowText}>→</Text>
-            </View>
+          <View style={styles.serviceHead}>
+            <Skeleton width={38} height={38} radius={radius.md} />
+            <Skeleton width="55%" height={18} />
           </View>
-        </TouchableOpacity>
-
-        {/* Already have account */}
-        <TouchableOpacity
-          style={styles.btnAlready}
-          onPress={() => router.push('/signIn')}
-          activeOpacity={0.7}
-        >
-          <Text style={styles.btnAlreadyText}>Already have an account? </Text>
-          <View style={styles.btnAlreadyLoginWrapper}>
-            <Text style={styles.btnAlreadyLogin}>Login</Text>
+          <View style={styles.body}>
+            <Skeleton width="100%" height={13} />
+            <Skeleton width="80%" height={13} style={{ marginTop: 6 }} />
+            <Skeleton width="60%" height={13} style={{ marginTop: space.lg }} />
+            <Skeleton width="50%" height={13} style={{ marginTop: space.md }} />
           </View>
-        </TouchableOpacity>
-      </View>
+        </View>
+      ))}
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: CREAM,
-  },
+  container: { ...common.screen },
 
-  // Header
   header: {
-    paddingHorizontal: 20,
-    paddingTop: 52,
-    paddingBottom: 20,
-    borderBottomWidth: 1,
-    borderBottomColor: CREAM_BORDER,
-    position: 'relative',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: space.xl,
+    paddingTop: space.xxl,
+    paddingBottom: space.md,
+    backgroundColor: colors.background,
+    borderBottomColor: colors.border,
   },
   backBtn: {
-    flexDirection: 'row',
+    width: 40,
+    height: 40,
+    borderRadius: radius.md,
     alignItems: 'center',
-    gap: 6,
+    justifyContent: 'center',
+    backgroundColor: colors.card,
     borderWidth: 1,
-    borderColor: '#d5c89a',
-    paddingHorizontal: 12,
-    paddingVertical: 5,
-    alignSelf: 'flex-start',
-    marginBottom: 18,
-    borderRadius: 10,
-  },
-  backArrow: {
-    fontSize: 18,
-    color: TAUPE,
-    fontFamily: 'serif',
-  },
-  backLabel: {
-    fontSize: 9,
-    fontWeight: '500',
-    color: TAUPE,
-    letterSpacing: 1.5,
-    textTransform: 'uppercase',
-  },
-  headerTitles: {
-    paddingRight: 48,
+    borderColor: colors.cardBorder,
   },
   headerTitle: {
-    fontSize: 36,
-    fontWeight: '700',
-    color: NAVY,
-    lineHeight: 36,
-    fontFamily: 'serif',
+    ...text.heading,
+    color: colors.foreground,
   },
-  headerTitleItalic: {
-    color: GOLD,
-    fontStyle: 'italic',
-    fontFamily: 'serif',
-  },
-  headerSub: {
-    fontSize: 15,
-    fontWeight: '300',
-    color: TAUPE,
-    marginTop: 6,
-    letterSpacing: 0.3,
-  },
-  crownBadge: {
-    position: 'absolute',
-    top: 52,
-    right: 20,
-    width: 36,
-    height: 36,
-    backgroundColor: NAVY,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderRadius: 8,
-  },
-  crownChar: {
-    fontSize: 16,
-    color: GOLD,
+  headerSpacer: { width: 40 },
+
+  scroll: {
+    paddingTop: space.md,
+    paddingBottom: space.xxxl * 2,
   },
 
-  // List
-  list: {
-    flex: 1,
-  },
-  serviceItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 20,
-    paddingVertical: 16,
+  service: {
+    marginHorizontal: space.xxl,
+    paddingVertical: space.xl,
     borderBottomWidth: 1,
-    borderBottomColor: CREAM_BORDER,
-    gap: 14,
+    borderBottomColor: colors.border,
   },
-  serviceItemLast: {
+  serviceLast: {
     borderBottomWidth: 0,
   },
-  serviceNum: {
-    fontSize: 22,
-    fontWeight: '600',
-    color: CREAM_BORDER,
-    fontFamily: 'serif',
-    width: 24,
-    flexShrink: 0,
+  serviceHead: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: space.md,
   },
-  serviceInfo: {
+  iconTile: {
+    width: 38,
+    height: 38,
+    borderRadius: radius.md,
+    backgroundColor: colors.secondary,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  serviceTitle: {
+    fontFamily: text.display.fontFamily,
+    fontSize: 19,
+    lineHeight: 24,
+    letterSpacing: -0.6,
+    color: colors.foreground,
     flex: 1,
   },
-  serviceName: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: NAVY,
-    fontFamily: 'serif',
-    lineHeight: 20,
-    marginBottom: 4,
+
+  /* Indented to line up under the title, not the icon tile. */
+  body: {
+    marginTop: space.lg,
+    marginLeft: 38 + space.md,
   },
-  serviceBlurb: {
-    fontSize: 15,
-    fontWeight: '300',
-    color: TAUPE,
-    lineHeight: 20,
+  blurb: {
+    ...text.small,
+    color: colors.foreground,
   },
-  serviceArrow: {
-    fontSize: 18,
-    color: GOLD,
-    fontFamily: 'serif',
-    flexShrink: 0,
+  points: {
+    marginTop: space.lg,
+    gap: space.sm,
+  },
+  pointRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: space.md,
+  },
+  pointDot: {
+    width: 4,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: colors.primary,
+    marginTop: 8,
+  },
+  pointText: {
+    ...text.small,
+    color: colors.mutedFg,
+    flex: 1,
   },
 
-  // Footer
-  footer: {
-    position: 'absolute',
-    bottom: 0,
-    left: 0,
-    right: 0,
-    paddingHorizontal: 20,
-    paddingTop: 14,
-    paddingBottom: 32,
-    backgroundColor: CREAM,
+  noteRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: space.sm,
+    marginTop: space.xl,
+    paddingTop: space.lg,
     borderTopWidth: 1,
-    borderTopColor: CREAM_BORDER,
-    gap: 8,
+    borderTopColor: colors.border,
   },
-  btnBook: {
-    backgroundColor: NAVY,
-    height: 54,
-    flexDirection: 'row',
-    justifyContent: 'space-between',
+  noteText: {
+    ...text.caption,
+    color: colors.mutedFg,
+    flex: 1,
+  },
+
+  footMark: {
     alignItems: 'center',
-    paddingHorizontal: 18,
-    borderRadius: 10,
-  },
-  btnBookLabel: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#ffffff',
-    letterSpacing: 1,
-    textTransform: 'uppercase',
-  },
-  btnBookRight: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-  },
-  btnBookHint: {
-    fontSize: 14,
-    fontStyle: 'italic',
-    color: 'rgba(255,255,255,0.4)',
-    fontFamily: 'serif',
-  },
-  btnBookArrowBox: {
-    width: 28,
-    height: 28,
-    backgroundColor: GOLD,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderRadius: 8,
-  },
-  btnBookArrowText: {
-    fontSize: 18,
-    color: NAVY,
-    fontFamily: 'serif',
-  },
-  btnAlready: {
-    height: 36,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 4,
-  },
-  btnAlreadyText: {
-    fontSize: 15,
-    fontWeight: '300',
-    color: TAUPE,
-  },
-  btnAlreadyLoginWrapper: {
-    borderBottomWidth: 1,
-    borderBottomColor: GOLD,
-  },
-  btnAlreadyLogin: {
-    fontSize: 15,
-    fontWeight: '600',
-    color: NAVY,
+    marginTop: space.xxxl,
   },
 });
