@@ -79,7 +79,7 @@ export default function AccountScreen() {
   return (
     <View style={styles.container}>
       <StatusBar barStyle="dark-content" backgroundColor={colors.background} />
-      <ScreenHeader title="Personal info" onBack={() => router.back()} />
+      <ScreenHeader title="Personal Info" onBack={() => router.back()} large />
 
       <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
         <View style={styles.avatarBlock}>
@@ -117,7 +117,7 @@ export default function AccountScreen() {
           <InfoRow
             label="Name"
             value={fullName}
-            placeholder="Add your name"
+            placeholder="e.g., John Doe"
             onPress={() => router.push('/account-name' as any)}
             trailing={<ChevronRight size={18} color={colors.mutedFg} />}
           />
@@ -220,7 +220,7 @@ function AccountSkeleton() {
   return (
     <View style={styles.container} accessibilityLabel="Loading personal information" accessibilityLiveRegion="polite">
       <StatusBar barStyle="dark-content" backgroundColor={colors.background} />
-      <ScreenHeader title="Personal info" onBack={() => router.back()} />
+      <ScreenHeader title="Personal info" onBack={() => router.back()} large />
       <View style={styles.avatarBlock}>
         <Skeleton width={AVATAR_OUTER} height={AVATAR_OUTER} radius={AVATAR_OUTER / 2} />
         <Skeleton width={96} height={16} style={{ marginTop: space.md }} />

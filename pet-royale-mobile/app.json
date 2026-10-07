@@ -24,11 +24,6 @@
       "predictiveBackGestureEnabled": false,
       "permissions": []
     },
-    "web": {
-      "output": "single",
-      "favicon": "./assets/images/favicon.png",
-      "bundler": "metro"
-    },
     "plugins": [
       "expo-router",
       "expo-font",
@@ -43,12 +38,9 @@
         "expo-splash-screen",
         {
           "image": "./assets/images/splash-icon.png",
-          "imageWidth": 300,
-          "resizeMode": "contain",
-          "backgroundColor": "#051F42",
-          "dark": {
-            "backgroundColor": "#051F42"
-          }
+          "imageWidth": 200,
+          "backgroundColor": "#051F42"
+          
         }
       ],
       [
@@ -61,8 +53,7 @@
       ],
       "expo-secure-store",
       "expo-image",
-      "expo-status-bar",
-      "expo-web-browser"
+      "expo-status-bar"
     ],
     "experiments": {
       "typedRoutes": true,

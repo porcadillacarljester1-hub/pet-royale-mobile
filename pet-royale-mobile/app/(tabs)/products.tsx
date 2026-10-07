@@ -1,7 +1,7 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput,
-  RefreshControl, Animated,
+  RefreshControl, Animated, useWindowDimensions,
 } from 'react-native';
 import { supabase } from '../../lib/supabase';
 import { useFocusEffect } from 'expo-router';
@@ -23,8 +23,19 @@ interface Product {
   stock: number | null;
 }
 
+/* Two columns on phones, three on small tablets, four on large ones.
+   The card width comes from the real screen width, so the grid fills
+   the row on any device. */
+function useGridLayout() {
+  const { width } = useWindowDimensions();
+  const cols = width >= 900 ? 4 : width >= 600 ? 3 : 2;
+  const cardWidth = Math.floor((width - space.xxl * 2 - space.md * (cols - 1)) / cols);
+  return { cardWidth };
+}
+
 export default function ProductsScreen() {
   const insets = useSafeAreaInsets();
+  const { cardWidth } = useGridLayout();
 
   const [products, setProducts] = useState<Product[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -97,8 +108,8 @@ export default function ProductsScreen() {
     <View style={styles.container}>
       {/* ── Header ── Shop is a tab, so it's headed like the other tabs
           (Visits, Profile): a large title and no back button. */}
-      <View style={[styles.header, { paddingTop: insets.top + space.md }]}>
-        <Text style={styles.title}>Pet Essentials</Text>
+      <View style={[styles.header, { paddingTop: insets.top + space.xs }]}>
+        <Text style={styles.title} accessibilityRole="header">Pet Essentials</Text>
         <Text style={styles.headerSub}>
           {resultCountLabel || 'Browse available products from the clinic'}
         </Text>
@@ -115,6 +126,7 @@ export default function ProductsScreen() {
           onChangeText={setSearch}
           returnKeyType="search"
           autoCorrect={false}
+          accessibilityLabel="Search products"
         />
         {search.length > 0 && (
           <TouchableOpacity
@@ -136,9 +148,9 @@ export default function ProductsScreen() {
              instead of only dismissing the keyboard. */}
       {isLoading ? (
         <View style={styles.categoryRow}>
-          <Skeleton width={56} height={38} radius={radius.pill} />
-          <Skeleton width={112} height={38} radius={radius.pill} />
-          <Skeleton width={96} height={38} radius={radius.pill} />
+          <Skeleton width={56} height={44} radius={radius.pill} />
+          <Skeleton width={112} height={44} radius={radius.pill} />
+          <Skeleton width={96} height={44} radius={radius.pill} />
         </View>
       ) : categories.length > 0 && (
         <ScrollView
@@ -198,7 +210,7 @@ export default function ProductsScreen() {
         }
       >
         {isLoading ? (
-          <ProductGridSkeleton />
+          <ProductGridSkeleton cardWidth={cardWidth} />
         ) : grouped.length === 0 ? (
           !loadError && (
             <View style={styles.empty}>
@@ -218,7 +230,7 @@ export default function ProductsScreen() {
                 <Text style={styles.categoryTitle}>{category}</Text>
                 <View style={styles.productGrid}>
                   {items.map((p) => (
-                    <ProductCard key={p.id} product={p} style={styles.gridCard} />
+                    <ProductCard key={p.id} product={p} style={{ width: cardWidth }} />
                   ))}
                 </View>
               </View>
@@ -234,18 +246,23 @@ export default function ProductsScreen() {
 const styles = StyleSheet.create({
   container: { ...common.screen },
 
+  /* Same side margin (space.xxl) and title style as Profile. */
   header: {
-    paddingHorizontal: space.xl,
+    paddingHorizontal: space.xxl,
     paddingBottom: space.md,
   },
-  title: { ...text.display, color: colors.foreground },
+  title: { ...text.screenTitle, color: colors.foreground },
   headerSub: { ...text.caption, color: colors.mutedFg, marginTop: 3 },
 
+  /* Search and chips sit on the same cream surface and border as the
+     cards, and are 44 high so they're easy to hit. */
   searchWrap: {
     flexDirection: 'row', alignItems: 'center', gap: space.sm,
-    backgroundColor: colors.muted, borderRadius: radius.pill,
-    paddingHorizontal: space.md, paddingVertical: space.sm + 2,
-    marginHorizontal: space.xl, marginBottom: space.md,
+    minHeight: 44,
+    backgroundColor: colors.card, borderRadius: radius.md,
+    borderWidth: 1, borderColor: colors.cardBorder,
+    paddingHorizontal: space.md,
+    marginHorizontal: space.xxl, marginBottom: space.md,
   },
   searchInput: { flex: 1, ...text.small, color: colors.foreground, padding: 0 },
 
@@ -256,14 +273,15 @@ const styles = StyleSheet.create({
   productList: { flex: 1 },
   categoryRow: {
     flexDirection: 'row', flexWrap: 'nowrap',
-    paddingHorizontal: space.xl, gap: space.sm, paddingBottom: space.lg,
+    paddingHorizontal: space.xxl, gap: space.sm, paddingBottom: space.lg,
   },
   categoryChip: {
     flexShrink: 0, flexGrow: 0,
-    paddingHorizontal: space.lg, paddingVertical: space.sm + 2,
+    minHeight: 44, justifyContent: 'center',
+    paddingHorizontal: space.lg,
     borderRadius: radius.pill,
     backgroundColor: colors.card,
-    borderWidth: 1, borderColor: colors.border,
+    borderWidth: 1, borderColor: colors.cardBorder,
   },
   categoryChipActive: { backgroundColor: colors.primary, borderColor: colors.primary },
   categoryChipText: { ...text.smallBold, color: colors.foreground },
@@ -272,12 +290,12 @@ const styles = StyleSheet.create({
   loadErrorBox: {
     flexDirection: 'row', alignItems: 'center', gap: 8,
     backgroundColor: status.danger.bg, borderRadius: radius.sm, padding: space.md,
-    marginHorizontal: space.xl, marginBottom: space.md,
+    marginHorizontal: space.xxl, marginBottom: space.md,
   },
   loadErrorText: { flex: 1, fontSize: 12.5, color: status.danger.fg, fontFamily: fonts.body },
   loadErrorRetry: { fontSize: 12.5, fontFamily: fonts.bodyBold, color: status.danger.fg, textDecorationLine: 'underline' },
 
-  scrollContent: { paddingHorizontal: space.xl },
+  scrollContent: { paddingHorizontal: space.xxl },
 
   empty: { alignItems: 'center', paddingTop: 60, gap: space.sm },
   emptyIconWrap: {
@@ -290,25 +308,23 @@ const styles = StyleSheet.create({
   categorySection: { marginBottom: space.xxl },
   categoryTitle: { ...text.section, color: colors.foreground, marginBottom: space.md },
 
-  // Two columns, each 48% wide with space-between, so a last row with
-  // one product stays on the left instead of stretching across.
+  // Cards have a fixed width worked out from the screen, with a gap
+  // between them, so a last row with fewer cards stays on the left.
   productGrid: {
-    flexDirection: 'row', flexWrap: 'wrap',
-    justifyContent: 'space-between', rowGap: space.md,
+    flexDirection: 'row', flexWrap: 'wrap', gap: space.md,
   },
-  gridCard: { width: '48%' },
 });
 
 /* ── Loading state ──
-   Same two-column grid as the real list, so the page doesn't jump when
-   the products arrive. */
-function ProductGridSkeleton() {
+   Same grid as the real list, so the page doesn't jump when the
+   products arrive. */
+function ProductGridSkeleton({ cardWidth }: { cardWidth: number }) {
   return (
     <View accessibilityLabel="Loading products" accessibilityLiveRegion="polite">
       <Skeleton width={130} height={18} style={{ marginBottom: space.md }} />
       <View style={styles.productGrid}>
         {[0, 1, 2, 3].map((i) => (
-          <ProductCardSkeleton key={i} style={styles.gridCard} />
+          <ProductCardSkeleton key={i} style={{ width: cardWidth }} />
         ))}
       </View>
     </View>

@@ -156,7 +156,6 @@ export default function TabLayout() {
       <Tabs.Screen name="pets" options={{ href: null }} />
       <Tabs.Screen name="notifications" options={{ href: null }} />
       <Tabs.Screen name="about" options={{ href: null }} />
-      <Tabs.Screen name="settings" options={{ href: null }} />
       <Tabs.Screen name="security" options={{ href: null }} />
       <Tabs.Screen name="payment-history" options={{ href: null }} />
     </Tabs>

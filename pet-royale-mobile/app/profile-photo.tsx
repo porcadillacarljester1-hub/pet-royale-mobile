@@ -14,10 +14,36 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { supabase } from '@/lib/supabase';
 import { useRouter } from 'expo-router';
 import * as ImagePicker from 'expo-image-picker';
+import * as ImageManipulator from 'expo-image-manipulator';
 import { fetchAvatarHistory, addAvatarHistoryEntry, type AvatarHistoryItem } from '@/lib/avatarHistory';
 import { colors, status, text, space, radius, shadow, common } from '@/constants/theme';
 import { ScreenHeader } from '@/components/ScreenHeader';
 import { PhotoCropper } from '@/components/PhotoCropper';
+
+const MAX_SIDE = 1600;
+
+/* Bakes in the camera's rotation and shrinks the photo, so the width and
+   height handed to the cropper are the real ones. Camera originals can be
+   huge and carry an EXIF rotation that makes the picker's numbers wrong. */
+async function prepare(a: ImagePicker.ImagePickerAsset) {
+  const longest = Math.max(a.width, a.height);
+  const actions: ImageManipulator.Action[] =
+    longest > MAX_SIDE
+      ? [{ resize: a.width >= a.height ? { width: MAX_SIDE } : { height: MAX_SIDE } }]
+      : [];
+  const r = await ImageManipulator.manipulateAsync(a.uri, actions, {
+    compress: 0.9,
+    format: ImageManipulator.SaveFormat.JPEG,
+  });
+  return { uri: r.uri, width: r.width, height: r.height };
+}
+
+function base64ToArrayBuffer(b64: string): ArrayBuffer {
+  const bin = atob(b64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return bytes.buffer;
+}
 
 /* One option row: neutral icon circle, bold label, optional chevron.
    Plain rows between hairlines, the same way Instagram and Facebook
@@ -62,11 +88,16 @@ export default function ProfilePhotoScreen() {
   const [currentUrl, setCurrentUrl] = useState<string | null>(null);
   const [selectedUri, setSelectedUri] = useState<string | null>(null);
   const [selectedIsExisting, setSelectedIsExisting] = useState(false);
+  // The cropped photo's data, used for the upload (see handleSave).
+  const [selectedBase64, setSelectedBase64] = useState<string | null>(null);
   const [history, setHistory] = useState<AvatarHistoryItem[]>([]);
   const [saving, setSaving] = useState(false);
   const [userId, setUserId] = useState<string | null>(null);
   // The photo just picked or taken, waiting in the move-and-scale step.
   const [cropSource, setCropSource] = useState<{ uri: string; width: number; height: number } | null>(null);
+  // The preview URI that failed to load, so the fallback shows instead of
+  // a blank circle. Comparing against the current URI means no reset is needed.
+  const [failedUri, setFailedUri] = useState<string | null>(null);
 
   useEffect(() => {
     (async () => {
@@ -86,6 +117,14 @@ export default function ProfilePhotoScreen() {
 
   /* allowsEditing is off on purpose: the system crop screen can't be
      styled or show a circle, so PhotoCropper handles that step. */
+  const openCropper = async (asset: ImagePicker.ImagePickerAsset) => {
+    try {
+      setCropSource(await prepare(asset));
+    } catch {
+      Alert.alert('Error', 'Couldn\u2019t open that photo. Please try again.');
+    }
+  };
+
   const pickFromLibrary = async () => {
     const { status: permStatus } = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (permStatus !== 'granted') {
@@ -97,10 +136,7 @@ export default function ProfilePhotoScreen() {
       allowsEditing: false,
       quality: 1,
     });
-    if (!result.canceled) {
-      const a = result.assets[0];
-      setCropSource({ uri: a.uri, width: a.width, height: a.height });
-    }
+    if (!result.canceled) await openCropper(result.assets[0]);
   };
 
   const takePhoto = async () => {
@@ -111,12 +147,9 @@ export default function ProfilePhotoScreen() {
     }
     const result = await ImagePicker.launchCameraAsync({
       allowsEditing: false,
-      quality: 1,
+      quality: 0.8,
     });
-    if (!result.canceled) {
-      const a = result.assets[0];
-      setCropSource({ uri: a.uri, width: a.width, height: a.height });
-    }
+    if (!result.canceled) await openCropper(result.assets[0]);
   };
 
   const selectFromHistory = (item: AvatarHistoryItem) => {
@@ -150,6 +183,7 @@ export default function ProfilePhotoScreen() {
 
   const previewUri = selectedUri || currentUrl;
   const hasChange = !!selectedUri && selectedUri !== currentUrl;
+  const showPreviewImage = !!previewUri && previewUri !== failedUri;
 
   const handleSave = async () => {
     if (!hasChange || !userId) return;
@@ -159,13 +193,24 @@ export default function ProfilePhotoScreen() {
 
       // Only upload if this is a brand-new local photo (not one picked from history, which is already a real URL)
       if (!selectedIsExisting) {
-        const fileExt = selectedUri!.split('.').pop() || 'jpg';
-        const fileName = `${userId}_${Date.now()}.${fileExt}`;
-        const response = await fetch(selectedUri!);
-        const arrayBuffer = await response.arrayBuffer();
+        const isPng = /\.png($|\?)/i.test(selectedUri!);
+        const ext = isPng ? 'png' : 'jpg';
+        const fileName = `${userId}_${Date.now()}.${ext}`;
+
+        /* Don't re-read the file with fetch(file://...).arrayBuffer(): on
+           Android it returns a ~14-byte stub, which uploads as a broken
+           photo. The cropper already hands back the image data as base64. */
+        if (!selectedBase64) throw new Error('No photo data');
+        const buffer = base64ToArrayBuffer(selectedBase64);
+        // Never store a stub: it would show up as a blank photo.
+        if (buffer.byteLength < 1000) throw new Error('Photo file is too small');
+
         const { error: uploadError } = await supabase.storage
           .from('avatars')
-          .upload(fileName, arrayBuffer, { contentType: `image/${fileExt}`, upsert: false });
+          .upload(fileName, buffer, {
+            contentType: isPng ? 'image/png' : 'image/jpeg',
+            upsert: false,
+          });
         if (uploadError) throw uploadError;
         const { data } = supabase.storage.from('avatars').getPublicUrl(fileName);
         finalUrl = data.publicUrl;
@@ -176,7 +221,8 @@ export default function ProfilePhotoScreen() {
       await addAvatarHistoryEntry(userId, finalUrl);
       await supabase.auth.updateUser({ data: { avatar_url: finalUrl } });
       router.back();
-    } catch {
+    } catch (e) {
+      console.warn('save photo failed', e);
       Alert.alert('Error', 'Failed to save photo. Please try again.');
     } finally {
       setSaving(false);
@@ -199,7 +245,7 @@ export default function ProfilePhotoScreen() {
 
   return (
     <View style={common.screen}>
-      <ScreenHeader title="Profile photo" onBack={handleBack} />
+      <ScreenHeader title="Profile photo" onBack={handleBack} large />
 
       <ScrollView
         style={styles.flex}
@@ -209,8 +255,12 @@ export default function ProfilePhotoScreen() {
         {/* ── Preview ── No card, just the photo with the gold ring. */}
         <View style={styles.previewSection}>
           <View style={styles.previewRing}>
-            {previewUri ? (
-              <Image source={{ uri: previewUri }} style={styles.previewImage} />
+            {showPreviewImage ? (
+              <Image
+                source={{ uri: previewUri! }}
+                style={styles.previewImage}
+                onError={() => setFailedUri(previewUri)}
+              />
             ) : (
               <View style={styles.previewFallback}>
                 <User size={64} color={colors.primaryFg} strokeWidth={1.6} />
@@ -280,8 +330,9 @@ export default function ProfilePhotoScreen() {
       <PhotoCropper
         source={cropSource}
         onCancel={() => setCropSource(null)}
-        onDone={(uri) => {
+        onDone={(uri, base64) => {
           setSelectedUri(uri);
+          setSelectedBase64(base64);
           setSelectedIsExisting(false);
           setCropSource(null);
         }}

@@ -9,74 +9,10 @@ import {
   InteractionManager,
 } from 'react-native';
 import { router } from 'expo-router';
-import {
-  Stethoscope,
-  Syringe,
-  HeartPulse,
-  ShieldAlert,
-  Scissors,
-  ArrowLeft,
-  Clock,
-  PawPrint,
-} from 'lucide-react-native';
+import { ArrowLeft, Clock, PawPrint } from 'lucide-react-native';
 import { colors, text, space, radius, common, hitSlop } from '../constants/theme';
 import { Skeleton } from '../components/Skeleton';
-
-/* What each service is, in a sentence or two, plus a few practical
-   things worth knowing before you come in. No prices: they vary by
-   weight and by what the vet finds on the day, and a number here that
-   doesn't match the invoice is worse than no number.
-
-   `points` and `note` are optional. Only claims that hold for any vet
-   clinic are kept here. Add specifics (which vaccines, whether surgery
-   is by appointment, grooming prices) once the clinic confirms them. */
-const SERVICES = [
-  {
-    id: '01',
-    title: 'Veterinary Check-ups',
-    Icon: Stethoscope,
-    blurb:
-      'For routine visits, and for the times something just seems off. The vet examines your pet, tells you what they found, and what to do next.',
-    points: ['Tell us what you\u2019ve noticed at home: appetite, energy, stool'],
-  },
-  {
-    id: '02',
-    title: 'Vaccination & Deworming',
-    Icon: Syringe,
-    blurb:
-      'Vaccines and deworming on schedule, so nothing gets missed. Puppies and kittens start young and need a few rounds, a few weeks apart.',
-    points: ['Bring your pet\u2019s vaccine card so we can pick up where you left off'],
-  },
-  {
-    id: '03',
-    title: 'Minor & Major Surgeries',
-    Icon: HeartPulse,
-    blurb:
-      'Minor and major procedures. Your pet is seen first, so you know what\u2019s involved before the day.',
-  },
-  {
-    id: '04',
-    title: 'Confinement & Emergency Care',
-    Icon: ShieldAlert,
-    blurb:
-      'For pets that need to stay with us to be watched and treated, and for emergencies.',
-    note: 'If it\u2019s urgent, call the clinic. Don\u2019t wait for an appointment.',
-  },
-  {
-    id: '05',
-    title: 'Grooming',
-    Icon: Scissors,
-    blurb:
-      'Bath, blow-dry and haircut. Tell the groomer how you like it, or bring a photo.',
-  },
-] as {
-  id: string;
-  title: string;
-  Icon: typeof Stethoscope;
-  blurb: string;
-  points?: string[];
-  note?: string;
-}[];
+import { SERVICES } from '../constants/services';
 
 export default function ServicesScreen() {
   /* useState with a lazy initializer keeps each Animated.Value stable

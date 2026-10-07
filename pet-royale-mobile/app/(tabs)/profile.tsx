@@ -8,10 +8,9 @@ import {
   ScrollView,
   Image,
   Alert,
-  Platform,
 } from 'react-native';
 import { router, useFocusEffect } from 'expo-router';
-import Constants from 'expo-constants';
+import Constants, { ExecutionEnvironment } from 'expo-constants';
 import { supabase } from '../../lib/supabase';
 import {
   User,
@@ -23,6 +22,7 @@ import {
   Phone,
   PawPrint,
   Plus,
+  LogOut,
 } from 'lucide-react-native';
 import {
   colors,
@@ -34,7 +34,7 @@ import {
 } from '../../constants/theme';
 import { useTabBarClearance } from './_layout';
 import { Skeleton } from '../../components/Skeleton';
-import * as Notifications from 'expo-notifications';
+
 
 const ACCOUNT_MENU = [
   {
@@ -162,35 +162,36 @@ export default function ProfileScreen() {
     }, [])
   );
 
-  /* The actual sign-out, kept separate from the confirmation so the same
-     work runs from the phone's Alert and from the browser's confirm(). */
+  /* The actual sign-out, kept separate from the confirmation dialog. */
   const doSignOut = async () => {
     // Remove this phone's token first, so the next person to use it
     // (or nobody) doesn't receive this account's pushes. It must run
     // before signOut(), while the session still exists.
-    try {
-      const projectId =
-        Constants.expoConfig?.extra?.eas?.projectId ?? Constants.easConfig?.projectId;
-      const { data: token } = await Notifications.getExpoPushTokenAsync({ projectId });
-      await supabase.from('push_tokens').delete().eq('token', token);
-    } catch (err) {
-      // Never block signing out because of this.
-      console.log('Push token cleanup failed:', err);
+    // Skipped in Expo Go, where remote push isn't available and merely
+    // importing expo-notifications would crash on Android.
+    if (Constants.executionEnvironment !== ExecutionEnvironment.StoreClient) {
+      try {
+        const Notifications = await import('expo-notifications');
+        const projectId =
+          Constants.expoConfig?.extra?.eas?.projectId ?? Constants.easConfig?.projectId;
+        const { data: token } = await Notifications.getExpoPushTokenAsync({ projectId });
+        await supabase.from('push_tokens').delete().eq('token', token);
+      } catch (err) {
+        // Never block signing out because of this.
+        console.log('Push token cleanup failed:', err);
+      }
     }
     await supabase.auth.signOut();
     router.replace('/');
   };
 
-  /* Alert.alert does nothing on web, so the browser's confirm() is used
-     there. Phones keep the native dialog. */
+  /* Not 'destructive': signing out loses nothing, so the dialog
+     shouldn't turn red on iOS. Red is reserved for things like
+     cancelling a booking. */
   const handleSignOut = () => {
-    if (Platform.OS === 'web') {
-      if (window.confirm('Are you sure you want to sign out?')) doSignOut();
-      return;
-    }
     Alert.alert('Sign out', 'Are you sure you want to sign out?', [
       { text: 'Cancel', style: 'cancel' },
-      { text: 'Sign out', style: 'destructive', onPress: doSignOut },
+      { text: 'Sign out', onPress: doSignOut },
     ]);
   };
 
@@ -284,6 +285,7 @@ export default function ProfileScreen() {
             </View>
             {pets.length > 0 && (
               <TouchableOpacity
+                style={styles.seeAllBtn}
                 onPress={() => router.push('/(tabs)/pets' as any)}
                 hitSlop={hitSlop}
                 accessibilityRole="button"
@@ -394,8 +396,8 @@ export default function ProfileScreen() {
           <ChevronRight size={17} color={colors.mutedFg} />
         </TouchableOpacity>
 
-        {/* Neutral on purpose: signing out is easy to undo, so it
-            shouldn't look as dangerous as deleting something. */}
+        {/* Navy, not red: signing out is easy to undo, so it
+            shouldn't look as dangerous as cancelling or deleting. */}
         <TouchableOpacity
           style={styles.signOut}
           onPress={handleSignOut}
@@ -403,6 +405,7 @@ export default function ProfileScreen() {
           hitSlop={hitSlop}
           accessibilityRole="button"
         >
+          <LogOut size={20} color={colors.primary} strokeWidth={2} />
           <Text style={styles.signOutLabel}>Sign out</Text>
         </TouchableOpacity>
       </ScrollView>
@@ -427,16 +430,13 @@ const styles = StyleSheet.create({
 
   header: {
     paddingHorizontal: space.xxl,
-    paddingTop: space.xxxl,
+    paddingTop: space.xs,
     paddingBottom: space.lg,
   },
   /* 24 / bold / no tracking, the weight and size of a Facebook screen
      title, in the app's own typeface. */
   title: {
-    fontFamily: 'DMSans_700Bold',
-    fontSize: 24,
-    lineHeight: 28,
-    letterSpacing: 0,
+    ...text.screenTitle,
     color: colors.foreground,
   },
 
@@ -535,6 +535,12 @@ const styles = StyleSheet.create({
     color: colors.primaryFg,
   },
   seeAll: { ...text.smallBold, color: colors.primary },
+  /* Same 48px height as every other button. */
+  seeAllBtn: {
+    height: 48,
+    justifyContent: 'center',
+    paddingHorizontal: space.xs,
+  },
 
   /* Pets: avatar row, no cards. */
   petScroll: { marginHorizontal: -space.xxl },
@@ -648,16 +654,22 @@ const styles = StyleSheet.create({
   },
   aboutLabel: { ...text.bodyBold, color: colors.foreground, flex: 1 },
 
+  /* Account action: navy outline with a light navy tint. The tint is
+     navy #062041 at 10%; swap in a theme token if you have one. */
   signOut: {
     marginHorizontal: space.xxl,
     marginTop: space.md,
     height: 48,
-    borderRadius: radius.md,
-    backgroundColor: colors.muted,
+    borderRadius: 24,
+    flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
+    gap: space.sm,
+    borderWidth: 1.5,
+    borderColor: colors.primary,
+    backgroundColor: 'rgba(6, 32, 65, 0.10)',
   },
-  signOutLabel: { ...text.bodyBold, color: colors.foreground },
+  signOutLabel: { ...text.bodyBold, color: colors.primary },
 });
 
 /* ── Loading state ──

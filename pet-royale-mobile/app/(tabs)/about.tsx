@@ -8,7 +8,6 @@ import {
   StatusBar,
   Linking,
   Alert,
-  useWindowDimensions,
 } from 'react-native';
 import { supabase } from '../../lib/supabase';
 import { useRouter, useFocusEffect } from 'expo-router';
@@ -16,9 +15,8 @@ import {
   MapPin, Phone, Mail, Clock,
   Stethoscope, Scissors, ExternalLink,
 } from 'lucide-react-native';
-import { colors, text, space, radius, shadow, common } from '../../constants/theme';
+import { colors, text, space, radius, common } from '../../constants/theme';
 import { TAB_BAR_CLEARANCE } from './_layout';
-import { BrandWordmark } from '../../constants/brand';
 import { Skeleton, SkeletonRow } from '../../components/Skeleton';
 import { ScreenHeader } from '../../components/ScreenHeader';
 import { ServiceIcon } from '../../lib/serviceIcons';
@@ -29,24 +27,12 @@ import { fmtTime, openDays, closingTime } from '../../lib/format';
 const ABOUT_US =
   'Pet Royale Clinic and Veterinary Services provides excellent healthcare of all companion animals.';
 
-const WORDMARK_ASPECT = 1300 / 230;
-const WORDMARK_MAX_HEIGHT = 56;
-
 export default function AboutScreen() {
   const router = useRouter();
-  const { width } = useWindowDimensions();
 
   const [clinic, setClinic] = useState<any>(null);
   const [categories, setCategories] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
-
-  /* Panel margins (space.xl × 2) plus its inner padding (space.xxl × 2)
-     come off the screen width; whatever is left is the most the
-     wordmark may occupy. */
-  const wordmarkHeight = Math.min(
-    WORDMARK_MAX_HEIGHT,
-    (width - space.xl * 2 - space.xxl * 2) / WORDMARK_ASPECT
-  );
 
   const handleBack = () => {
     if (router.canGoBack()) router.back();
@@ -125,22 +111,14 @@ export default function AboutScreen() {
     <View style={styles.container}>
       <StatusBar barStyle="dark-content" backgroundColor={colors.background} />
 
-      <ScreenHeader title="About Pet Royale" onBack={handleBack} />
+      <ScreenHeader title="About Pet Royale" onBack={handleBack} large />
 
       <ScrollView
         contentContainerStyle={[styles.scroll, { paddingBottom: TAB_BAR_CLEARANCE }]}
         showsVerticalScrollIndicator={false}
       >
-        {/* ── Brand ──
-               The wordmark is gold-on-navy by design, so it sits on a
-               navy panel rather than the cream canvas. */}
-        <View style={styles.brand}>
-          <BrandWordmark height={wordmarkHeight} color={colors.accent} />
-          <Text style={styles.brandTag}>We care for you and your pets</Text>
-        </View>
-
         {/* ── About us ── */}
-        <View style={styles.section}>
+        <View style={[styles.section, styles.sectionFirst]}>
           <Text style={styles.sectionTitle}>About us</Text>
           <View style={styles.card}>
             {loading ? (
@@ -156,16 +134,18 @@ export default function AboutScreen() {
                 {categories.length > 0 && (
                   <View>
                     <Text style={styles.aboutLabel}>What we offer</Text>
-                    <View style={styles.serviceWrap}>
+                    <View style={styles.serviceList}>
                       {categories.map((c: any) => (
-                        <View key={c.name} style={styles.servicePill}>
-                          <ServiceIcon
-                            name={c.name}
-                            size={13}
-                            color={colors.primary}
-                            strokeWidth={2}
-                          />
-                          <Text style={styles.servicePillText}>{c.name}</Text>
+                        <View key={c.name} style={styles.serviceItem}>
+                          <View style={styles.serviceIcon}>
+                            <ServiceIcon
+                              name={c.name}
+                              size={17}
+                              color={colors.primary}
+                              strokeWidth={1.9}
+                            />
+                          </View>
+                          <Text style={styles.serviceText}>{c.name}</Text>
                         </View>
                       ))}
                     </View>
@@ -185,7 +165,7 @@ export default function AboutScreen() {
 
           <View style={styles.card}>
             {loading && [0, 1, 2].map((i) => (
-              <SkeletonRow key={i} tile={38} style={[styles.row, i > 0 && styles.rowBordered]} />
+              <SkeletonRow key={i} tile={40} style={[styles.row, i > 0 && styles.rowBordered]} />
             ))}
 
             {clinic?.address ? (
@@ -200,7 +180,7 @@ export default function AboutScreen() {
                 accessibilityLabel={`Address: ${clinic.address}. Opens in maps.`}
               >
                 <View style={styles.rowIcon}>
-                  <MapPin size={17} color={colors.primary} strokeWidth={1.9} />
+                  <MapPin size={18} color={colors.primary} strokeWidth={1.9} />
                 </View>
                 <View style={styles.rowCopy}>
                   <Text style={styles.rowLabel}>Address</Text>
@@ -219,7 +199,7 @@ export default function AboutScreen() {
                 accessibilityLabel={`Phone: ${clinic.phone_number}. Calls the clinic.`}
               >
                 <View style={styles.rowIcon}>
-                  <Phone size={17} color={colors.primary} strokeWidth={1.9} />
+                  <Phone size={18} color={colors.primary} strokeWidth={1.9} />
                 </View>
                 <View style={styles.rowCopy}>
                   <Text style={styles.rowLabel}>Phone</Text>
@@ -238,7 +218,7 @@ export default function AboutScreen() {
                 accessibilityLabel={`Email: ${clinic.email}. Opens your mail app.`}
               >
                 <View style={styles.rowIcon}>
-                  <Mail size={17} color={colors.primary} strokeWidth={1.9} />
+                  <Mail size={18} color={colors.primary} strokeWidth={1.9} />
                 </View>
                 <View style={styles.rowCopy}>
                   <Text style={styles.rowLabel}>Email</Text>
@@ -260,7 +240,7 @@ export default function AboutScreen() {
             {!loading && !clinic?.address && !clinic?.phone_number && !clinic?.email && (
               <View style={styles.row}>
                 <View style={styles.rowIcon}>
-                  <MapPin size={17} color={colors.mutedFg} strokeWidth={1.9} />
+                  <MapPin size={18} color={colors.mutedFg} strokeWidth={1.9} />
                 </View>
                 <Text style={styles.rowEmpty}>
                   Contact details haven&apos;t been added yet.
@@ -277,12 +257,12 @@ export default function AboutScreen() {
           <View style={styles.card}>
             {loading ? (
               [0, 1].map((i) => (
-                <SkeletonRow key={i} tile={38} style={[styles.row, i > 0 && styles.rowBordered]} />
+                <SkeletonRow key={i} tile={40} style={[styles.row, i > 0 && styles.rowBordered]} />
               ))
             ) : schedules.length === 0 ? (
               <View style={styles.row}>
                 <View style={styles.rowIcon}>
-                  <Clock size={17} color={colors.mutedFg} strokeWidth={1.9} />
+                  <Clock size={18} color={colors.mutedFg} strokeWidth={1.9} />
                 </View>
                 <Text style={styles.rowEmpty}>Hours haven&apos;t been set yet.</Text>
               </View>
@@ -291,8 +271,8 @@ export default function AboutScreen() {
                 <View key={s.key} style={[styles.row, i > 0 && styles.rowBordered]}>
                   <View style={styles.rowIcon}>
                     {s.isGrooming
-                      ? <Scissors size={17} color={colors.primary} strokeWidth={1.9} />
-                      : <Stethoscope size={17} color={colors.primary} strokeWidth={1.9} />}
+                      ? <Scissors size={18} color={colors.primary} strokeWidth={1.9} />
+                      : <Stethoscope size={18} color={colors.primary} strokeWidth={1.9} />}
                   </View>
                   <View style={styles.rowCopy}>
                     <Text style={styles.rowLabel}>
@@ -322,27 +302,9 @@ const styles = StyleSheet.create({
 
   scroll: { paddingBottom: space.xxxl },
 
-  /* Navy panel: the crest colours, gold lettering on navy. */
-  brand: {
-    alignItems: 'center',
-    marginHorizontal: space.xl,
-    marginTop: space.xl,
-    marginBottom: space.xxl,
-    paddingVertical: space.xxxl,
-    paddingHorizontal: space.xxl,
-    borderRadius: radius.card,
-    backgroundColor: colors.primary,
-    ...shadow.primary,
-  },
-  brandTag: {
-    ...text.displayRegular,
-    color: colors.primaryFg,
-    opacity: 0.78,
-    marginTop: space.lg,
-    textAlign: 'center',
-  },
-
   section: { paddingHorizontal: space.xl, marginBottom: space.xxl },
+  /* The brand panel used to sit above the first section. */
+  sectionFirst: { marginTop: space.xl },
   /* Same heading style as the other screens. */
   sectionTitle: {
     ...text.section,
@@ -362,28 +324,21 @@ const styles = StyleSheet.create({
   aboutLabel: {
     ...text.caption,
     color: colors.mutedFg,
-    marginBottom: space.sm,
+    marginBottom: space.md,
   },
-  serviceWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: space.sm },
-  servicePill: {
-    flexDirection: 'row',
+  serviceList: { gap: space.md },
+  serviceItem: { flexDirection: 'row', alignItems: 'center', gap: space.md },
+  serviceIcon: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: colors.muted,
     alignItems: 'center',
-    gap: 6,
-    paddingHorizontal: space.md,
-    paddingVertical: 6,
-    borderRadius: radius.pill,
-    backgroundColor: colors.secondary,
-    /* Never wider than the card's content area. */
-    maxWidth: '100%',
+    justifyContent: 'center',
   },
-  servicePillText: {
-    ...text.caption,
-    fontFamily: text.bodyBold.fontFamily,
-    color: colors.secondaryFg,
-    /* Lets the label wrap inside the pill instead of pushing it past
-       the card edge. */
-    flexShrink: 1,
-  },
+  /* flex: 1 lets a long service name wrap beside the icon instead of
+     running past the card edge. */
+  serviceText: { ...text.smallBold, color: colors.foreground, flex: 1 },
 
   row: {
     flexDirection: 'row',
@@ -394,9 +349,9 @@ const styles = StyleSheet.create({
   },
   rowBordered: { borderTopWidth: 1, borderTopColor: colors.border },
   rowIcon: {
-    width: 38,
-    height: 38,
-    borderRadius: radius.md,
+    width: 40,
+    height: 40,
+    borderRadius: 20,
     backgroundColor: colors.muted,
     alignItems: 'center',
     justifyContent: 'center',

@@ -86,7 +86,7 @@ export default function PaymentHistoryScreen() {
     <View style={styles.container}>
       <StatusBar barStyle="dark-content" backgroundColor={colors.background} />
 
-      <ScreenHeader title="Payment History" onBack={handleBack} />
+      <ScreenHeader title="Payment History" onBack={handleBack} large />
 
       <ScrollView
         showsVerticalScrollIndicator={false}
@@ -120,6 +120,9 @@ export default function PaymentHistoryScreen() {
         ) : (
           <>
             <View style={styles.totalCard}>
+              <View style={styles.totalIcon}>
+                <Receipt size={20} color={colors.primary} strokeWidth={1.9} />
+              </View>
               <Text style={styles.totalLabel}>Total paid</Text>
               <Text style={styles.totalAmount}>{peso(total)}</Text>
               <Text style={styles.totalSub}>
@@ -203,8 +206,8 @@ const styles = StyleSheet.create({
   emptyIconWrap: {
     width: 62,
     height: 62,
-    borderRadius: 22,
-    backgroundColor: colors.secondary,
+    borderRadius: 31,
+    backgroundColor: colors.muted,
     alignItems: 'center',
     justifyContent: 'center',
     marginBottom: space.sm,
@@ -212,16 +215,24 @@ const styles = StyleSheet.create({
   emptyTitle: { ...text.title, color: colors.foreground },
   emptyText: { ...text.small, color: colors.mutedFg, textAlign: 'center' },
 
+  /* Same card and beige icon circle as the Profile tiles. */
   totalCard: {
-    backgroundColor: colors.secondary,
-    borderRadius: radius.card,
+    ...common.card,
     padding: space.xl,
     marginBottom: space.xl,
   },
-  totalLabel: { ...text.eyebrow, color: colors.primary },
+  totalIcon: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: colors.muted,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  totalLabel: { ...text.eyebrow, color: colors.mutedFg, marginTop: space.lg },
   totalAmount: {
     ...text.display,
-    color: colors.foreground,
+    color: colors.primary,
     marginTop: space.xs,
     fontVariant: ['tabular-nums'],
   },
@@ -238,17 +249,17 @@ const styles = StyleSheet.create({
     marginBottom: space.sm,
   },
   rowIconWrap: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: colors.secondary,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: colors.muted,
     alignItems: 'center',
     justifyContent: 'center',
   },
   rowCopy: { flex: 1, minWidth: 0 },
   rowTitle: { ...text.smallBold, color: colors.foreground },
   rowSub: { ...text.caption, color: colors.mutedFg, marginTop: 2 },
-  rowAmount: { ...text.smallBold, color: colors.foreground, fontVariant: ['tabular-nums'] },
+  rowAmount: { ...text.smallBold, color: colors.primary, fontVariant: ['tabular-nums'] },
   rowAmountStacked: { marginTop: space.xs },
 });
 
@@ -258,10 +269,10 @@ const styles = StyleSheet.create({
 function HistorySkeleton() {
   return (
     <View accessibilityLabel="Loading payment history" accessibilityLiveRegion="polite">
-      <Skeleton width="100%" height={112} radius={radius.card} style={{ marginBottom: space.xl }} />
+      <Skeleton width="100%" height={150} radius={radius.card} style={{ marginBottom: space.xl }} />
       <Skeleton width={110} height={16} style={{ marginBottom: space.md }} />
       {[0, 1, 2, 3].map((i) => (
-        <SkeletonRow key={i} tile={40} style={styles.row} />
+        <SkeletonRow key={i} tile={44} style={styles.row} />
       ))}
     </View>
   );

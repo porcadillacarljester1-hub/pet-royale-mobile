@@ -6,12 +6,12 @@ import {
 } from 'react-native';
 import { supabase } from '@/lib/supabase';
 import * as ImagePicker from 'expo-image-picker';
+import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { colors, text, fonts, space, radius, common, hitSlop } from '../../constants/theme';
 import { TAB_BAR_CLEARANCE } from './_layout';
 import { Skeleton } from '../../components/Skeleton';
-import { ScreenHeader } from '../../components/ScreenHeader';
 import { useRealtimeRefresh } from '@/lib/useRealtimeRefresh';
 
 const genderOptions = ['Male', 'Female'];
@@ -28,9 +28,7 @@ interface BreedOption { id: string; name: string; }
 
 /* Every species the clinic treats, entirely from the categories table
    (migration 033 seeded Dog/Cat/Bird/Rabbit there as real rows, so
-   nothing regresses now that no species is hardcoded here anymore).
-   No more "four common chips plus a free-text Others" — one real,
-   clinic-managed list, full stop. */
+   nothing regresses now that no species is hardcoded here anymore). */
 async function fetchClinicSpecies(): Promise<SpeciesOption[]> {
   const { data, error } = await supabase
     .from('categories').select('id, name').eq('type', 'species').order('sort_order').order('name');
@@ -39,10 +37,9 @@ async function fetchClinicSpecies(): Promise<SpeciesOption[]> {
 }
 
 /* Breeds for one specific species — a real foreign-key relationship
-   (migration 033's breeds table), not a hardcoded JS object keyed by
-   species name. No free-text fallback: breed is now exactly as
-   locked-down as species is, so the only thing left to type by hand
-   anywhere in this form is the pet's name. */
+   (migration 033's breeds table). No free-text fallback: breed is as
+   locked-down as species, so the only thing typed by hand in this form
+   is the pet's name. */
 async function fetchBreedsForSpecies(speciesId: string): Promise<BreedOption[]> {
   const { data, error } = await supabase
     .from('breeds').select('id, name').eq('species_id', speciesId).order('sort_order').order('name');
@@ -104,9 +101,7 @@ function validateIdentity(f: {
   if (!f.hasPhoto) return 'Please add a photo of your pet.';
   if (!f.name.trim()) return 'Please enter your pet\'s name.';
   if (!f.species) return 'Please select a species.';
-  // Breed is optional now — not every owner knows it, especially for
-  // mixed or rescue pets, and there was no honest "not sure" option
-  // for every species anyway. Nothing to validate here.
+  // Breed is optional: not every owner knows it, especially for mixed or rescue pets.
   return '';
 }
 
@@ -128,12 +123,12 @@ function Segmented({
 }) {
   return (
     <View style={styles.segmented} accessibilityRole="radiogroup">
-      {options.map((o, i) => {
+      {options.map((o) => {
         const active = value === o.key;
         return (
           <TouchableOpacity
             key={o.key}
-            style={[styles.segment, i > 0 && styles.segmentDivider, active && styles.segmentActive]}
+            style={[styles.segment, active && styles.segmentActive]}
             onPress={() => onChange(o.key)}
             activeOpacity={0.8}
             accessibilityRole="radio"
@@ -195,11 +190,59 @@ function SheetRow({
   );
 }
 
-/* One pet, one row. Used in the live list and as the Review step, so the
-   review is a literal preview of what will be saved. With onPress the whole
-   row is the button; without it the row is a static preview. */
+function Chip({ label, selected, onPress }: { label: string; selected: boolean; onPress: () => void }) {
+  return (
+    <TouchableOpacity
+      style={[styles.chip, selected && styles.chipOn]}
+      onPress={onPress}
+      activeOpacity={0.8}
+      accessibilityRole="button"
+      accessibilityState={{ selected }}
+    >
+      <Text style={[styles.chipText, selected && styles.chipTextOn]}>{label}</Text>
+    </TouchableOpacity>
+  );
+}
+
+/* Round photo inside a navy ring, story-style. Falls back to the pet's initial. */
+function PetAvatar({ uri, name, size }: { uri?: string | null; name?: string; size: number }) {
+  const inner = size + 6;   // photo + the page-coloured gap
+  const outer = size + 12;  // + the navy ring
+  return (
+    <View
+      style={{
+        width: outer, height: outer, borderRadius: outer / 2,
+        borderWidth: 3, borderColor: colors.primary,
+        alignItems: 'center', justifyContent: 'center',
+      }}
+    >
+      <View
+        style={{
+          width: inner, height: inner, borderRadius: inner / 2,
+          borderWidth: 3, borderColor: colors.background,
+          alignItems: 'center', justifyContent: 'center', overflow: 'hidden',
+        }}
+      >
+        {uri ? (
+          <Image
+            source={{ uri }}
+            style={{ width: size, height: size, borderRadius: size / 2 }}
+            accessibilityLabel={`${name || 'Pet'} photo`}
+          />
+        ) : (
+          <View style={[styles.avatarFallback, { width: size, height: size, borderRadius: size / 2 }]}>
+            <Text style={[styles.avatarInitial, { fontSize: size * 0.4 }]}>{initialOf(name)}</Text>
+          </View>
+        )}
+      </View>
+    </View>
+  );
+}
+
+/* One pet, one row in the list. The whole row opens the manage sheet;
+   "Manage" is a navy outlined button that says so. */
 function PetRow({
-  photoUri, name, species, breed, gender, age, weight, neutered, note, onPress,
+  photoUri, name, species, breed, gender, age, weight, neutered, onPress,
 }: {
   photoUri?: string | null;
   name?: string;
@@ -209,49 +252,70 @@ function PetRow({
   age?: unknown;
   weight?: unknown;
   neutered?: string | null;
-  note?: string | null;
-  onPress?: () => void;
+  onPress: () => void;
 }) {
   const subtitle = breed ? `${breed} · ${species}` : species || '';
   const meta = describePet({ gender, age, weight, neutered });
 
-  const content = (
-    <>
-      {photoUri ? (
-        <Image source={{ uri: photoUri }} style={styles.avatar} accessibilityLabel={`${name || 'Pet'} photo`} />
-      ) : (
-        <View style={styles.avatarFallback}>
-          <Text style={styles.avatarInitial}>{initialOf(name)}</Text>
-        </View>
-      )}
+  return (
+    <TouchableOpacity
+      style={styles.row}
+      onPress={onPress}
+      activeOpacity={0.72}
+      accessibilityRole="button"
+      accessibilityHint="Opens edit and delete options"
+    >
+      <PetAvatar uri={photoUri} name={name} size={AVATAR} />
 
       <View style={styles.rowMain}>
-        <View style={styles.rowTitleLine}>
-          <Text style={styles.rowName} numberOfLines={1}>{name || 'Unnamed pet'}</Text>
-          {onPress ? <Text style={styles.manageText}>Manage</Text> : null}
-        </View>
-
+        <Text style={styles.rowName} numberOfLines={1}>{name || 'Unnamed pet'}</Text>
         {subtitle ? <Text style={styles.rowSub} numberOfLines={1}>{subtitle}</Text> : null}
         {meta ? <Text style={styles.rowMeta}>{meta}</Text> : null}
-        {note ? <Text style={styles.rowNote} numberOfLines={2}>{note}</Text> : null}
       </View>
-    </>
-  );
 
-  if (onPress) {
-    return (
-      <TouchableOpacity
-        style={styles.row}
-        onPress={onPress}
-        activeOpacity={0.72}
-        accessibilityRole="button"
-        accessibilityHint="Opens edit and delete options"
-      >
-        {content}
-      </TouchableOpacity>
-    );
-  }
-  return <View style={styles.row}>{content}</View>;
+      <View style={styles.manageBtn}>
+        <Text style={styles.manageText}>Manage</Text>
+        <Ionicons name="chevron-forward" size={16} color={colors.primary} />
+      </View>
+    </TouchableOpacity>
+  );
+}
+
+/* Review step: the pet as a small profile (photo, name, then three facts). */
+function ReviewProfile({
+  photoUri, name, species, breed, gender, age, neutered,
+}: {
+  photoUri?: string | null;
+  name?: string;
+  species?: string;
+  breed?: string | null;
+  gender?: string | null;
+  age?: unknown;
+  neutered?: string | null;
+}) {
+  const subtitle = breed ? `${breed} · ${species}` : species || '';
+  const stats = [
+    { value: gender || '—', label: 'Gender' },
+    { value: formatAge(age) || '—', label: 'Age' },
+    { value: neutered || '—', label: gender === 'Female' ? 'Spayed' : 'Neutered' },
+  ];
+
+  return (
+    <View style={styles.profile}>
+      <PetAvatar uri={photoUri} name={name} size={104} />
+      <Text style={styles.profileName} numberOfLines={1}>{name || 'Unnamed pet'}</Text>
+      {subtitle ? <Text style={styles.profileSub}>{subtitle}</Text> : null}
+
+      <View style={styles.stats}>
+        {stats.map((s) => (
+          <View key={s.label} style={styles.stat}>
+            <Text style={styles.statValue} numberOfLines={1}>{s.value}</Text>
+            <Text style={styles.statLabel}>{s.label}</Text>
+          </View>
+        ))}
+      </View>
+    </View>
+  );
 }
 
 function EmptyState({
@@ -300,8 +364,6 @@ export default function MyPetsScreen() {
   const [selectedSpecies, setSelectedSpecies] = useState('');
   const [selectedSpeciesId, setSelectedSpeciesId] = useState('');
   const [clinicSpecies, setClinicSpecies] = useState<SpeciesOption[]>([]);
-  const [showSpeciesPicker, setShowSpeciesPicker] = useState(false);
-  const [speciesPickerSearch, setSpeciesPickerSearch] = useState('');
   const [breed, setBreed] = useState('');
   /* The breeds list remembers which species it was fetched for, and is
      only used while that species is still the selected one. That way
@@ -313,13 +375,9 @@ export default function MyPetsScreen() {
   });
   const availableBreeds: BreedOption[] =
     selectedSpeciesId && breedsFor.speciesId === selectedSpeciesId ? breedsFor.list : [];
-  const [showBreedPicker, setShowBreedPicker] = useState(false);
-  const [breedSearch, setBreedSearch] = useState('');
   const [age, setAge] = useState('');
   const [selectedGender, setSelectedGender] = useState('');
-  const [color, setColor] = useState('');
-  const [neutered, setNeutered] = useState('');
-  const [notes, setNotes] = useState('');
+  const [neutered, setNeutered] = useState('No');
   const [photoUrl, setPhotoUrl] = useState<string | null>(null);
   const [pendingPhotoUri, setPendingPhotoUri] = useState<string | null>(null);
   const [showPhotoSheet, setShowPhotoSheet] = useState(false);
@@ -343,9 +401,7 @@ export default function MyPetsScreen() {
 
   useEffect(() => { fetchClinicSpecies().then(setClinicSpecies); }, []);
 
-  // Fetched whenever the picked species changes — breed is scoped
-  // to one specific species now, not a static, always-loaded object
-  // keyed by every species at once.
+  // Fetched whenever the picked species changes — breed is scoped to one species.
   useEffect(() => {
     if (!selectedSpeciesId) return;
     let active = true;
@@ -389,17 +445,14 @@ export default function MyPetsScreen() {
     setEditingPet(pet);
     setName(pet.name || '');
     // Species is looked up by name against the clinic's real list to
-    // recover its id — needed to fetch that species' breeds — rather
-    // than the old fixed/"Others" branch, which no longer exists.
+    // recover its id, which is needed to fetch that species' breeds.
     const match = clinicSpecies.find((s) => s.name === pet.species);
     setSelectedSpecies(pet.species || '');
     setSelectedSpeciesId(match?.id || '');
     setBreed(pet.breed || '');
     setAge(pet.age !== null && pet.age !== undefined ? String(pet.age) : '');
     setSelectedGender(pet.gender || '');
-    setColor(pet.color || '');
     setNeutered(pet.neutered || '');
-    setNotes(pet.notes || '');
     setPhotoUrl(pet.photo_url || null);
     setError('');
     setWizardStep(1);
@@ -408,7 +461,7 @@ export default function MyPetsScreen() {
 
   const resetForm = () => {
     setName(''); setSelectedSpecies(''); setSelectedSpeciesId(''); setBreed('');
-    setAge(''); setSelectedGender(''); setColor(''); setNeutered(''); setNotes('');
+    setAge(''); setSelectedGender(''); setNeutered('No');
     setPhotoUrl(null); setPendingPhotoUri(null); setError('');
   };
 
@@ -422,8 +475,7 @@ export default function MyPetsScreen() {
   const requestClose = () => {
     if (isSubmitting) return;
     const dirty = !editingPet && !!(
-      name || selectedSpecies || breed || age || selectedGender ||
-      color || neutered || notes || pendingPhotoUri
+      name || selectedSpecies || breed || age || selectedGender || pendingPhotoUri
     );
     if (!dirty) { closeModal(); return; }
     Alert.alert('Discard this pet?', 'The details you entered will be lost.', [
@@ -499,23 +551,18 @@ export default function MyPetsScreen() {
       setUploadingPhoto(false);
     }
 
+    /* weight, color and notes are deliberately absent. Weight is the
+       clinic's own scale reading (grooming pricing depends on it); color
+       and notes are no longer asked for here. Leaving a key out of an
+       update (rather than setting it to null) keeps whatever value is
+       already stored, so editing a pet never wipes them. */
     const payload = {
       name: name.trim(),
       species: selectedSpecies,
       breed: breed.trim() || null,
       age: age ? parseInt(age, 10) : null,
       gender: selectedGender,
-      // weight is deliberately absent — it's no longer something the
-      // owner enters here at all. Real weight comes from the clinic
-      // actually putting the pet on a scale, since grooming pricing
-      // depends on it and a guessed number was producing wrong
-      // prices. Omitting the key (not setting it to null) matters on
-      // an update specifically: it leaves whatever weight the clinic
-      // already recorded untouched, rather than wiping it out every
-      // time an owner edits some other detail.
-      color: color.trim() || null,
       neutered: neutered || null,
-      notes: notes.trim() || null,
       photo_url: finalPhotoUrl,
     };
 
@@ -565,14 +612,25 @@ export default function MyPetsScreen() {
         ? `${filtered.length} of ${pets.length} ${petWord}`
         : `${pets.length} ${petWord}`;
 
-  const filteredBreeds = availableBreeds.filter((b) => b.name.toLowerCase().includes(breedSearch.toLowerCase()));
+  // Continue stays greyed out until the step's required fields are filled.
+  const stepValid =
+    wizardStep === 1 ? !validateIdentity({ hasPhoto, name, species: selectedSpecies, breed })
+    : wizardStep === 2 ? !validateDetails({ gender: selectedGender, age })
+    : true;
 
   return (
     <View style={styles.container}>
-      {/* ── Header ── Same back-button header as the other sub-screens.
-          This screen opens from Profile and from Book, and used to have
-          no way back except the tab bar. */}
-      <ScreenHeader title="My Pets" onBack={handleBack} />
+      {/* Header: back, title on the left, Add pet on the right, as in the mockup. */}
+      <View style={[styles.header, { paddingTop: insets.top + space.sm }]}>
+        <TouchableOpacity onPress={handleBack} hitSlop={hitSlop} style={styles.headerBack} accessibilityRole="button" accessibilityLabel="Back">
+          <Ionicons name="chevron-back" size={28} color={colors.foreground} />
+        </TouchableOpacity>
+        <Text style={styles.headerTitle} numberOfLines={1}>My Pets</Text>
+        <TouchableOpacity style={styles.addBtn} onPress={openAdd} activeOpacity={0.85} accessibilityRole="button" accessibilityLabel="Add pet">
+          <Ionicons name="add" size={20} color={colors.primaryFg} />
+          <Text style={styles.addBtnText}>Add pet</Text>
+        </TouchableOpacity>
+      </View>
 
       <ScrollView
         style={styles.scroll}
@@ -582,20 +640,11 @@ export default function MyPetsScreen() {
           <RefreshControl refreshing={refreshing} onRefresh={() => fetchPets(true)} tintColor={colors.primary} colors={[colors.primary]} />
         }
       >
-        {/* ── Count and add ── */}
-        <View style={styles.summaryRow}>
-          <View style={styles.headerCopy}>
-            {countLabel ? <Text style={styles.subtitle}>{countLabel}</Text> : null}
-          </View>
-          <TouchableOpacity style={styles.addBtn} onPress={openAdd} activeOpacity={0.85} accessibilityRole="button">
-            <Text style={styles.addBtnText}>Add pet</Text>
-          </TouchableOpacity>
-        </View>
-
         {/* ── Search ── */}
         {pets.length > 0 && (
           <View style={styles.toolbar}>
             <View style={styles.searchWrap}>
+              <Ionicons name="search" size={18} color={colors.mutedFg} style={{ marginRight: space.sm }} />
               <TextInput
                 style={styles.searchInput}
                 placeholder="Search by name, species or breed"
@@ -614,6 +663,9 @@ export default function MyPetsScreen() {
             </View>
           </View>
         )}
+
+        {/* ── Count (under the search) ── */}
+        {countLabel ? <Text style={styles.count}>{countLabel}</Text> : null}
 
         {/* ── Load error ── */}
         {loadError ? (
@@ -651,7 +703,6 @@ export default function MyPetsScreen() {
                 age={pet.age}
                 weight={pet.weight}
                 neutered={pet.neutered}
-                note={pet.notes}
               />
             ))}
           </View>
@@ -661,9 +712,8 @@ export default function MyPetsScreen() {
       {/* ── Manage sheet. No slide animation: Edit opens the wizard Modal straight
            after this one closes, and iOS can drop a Modal presented mid-dismissal. ── */}
       <BottomSheet visible={!!menuPet} onClose={closeMenu} bottomInset={insets.bottom} animationType="none">
-        {/* Rendered only while a pet is selected. Once the sheet closes,
-            menuPet is null, and a leftover tap (a double tap, or one landing
-            as the sheet goes away) would read menuPet.id off null and crash. */}
+        {/* Rendered only while a pet is selected, so a leftover tap after the
+            sheet closes can't read menuPet.id off null. */}
         {menuPet ? (
           <>
             <Text style={styles.sheetTitle} numberOfLines={1}>{menuPet.name || 'Pet'}</Text>
@@ -680,13 +730,12 @@ export default function MyPetsScreen() {
       <Modal visible={showModal} animationType="slide" onRequestClose={requestClose}>
         <KeyboardAvoidingView style={styles.wizardContainer} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
           <View style={[styles.wizardHeader, { paddingTop: insets.top + space.sm }]}>
-            <TouchableOpacity onPress={requestClose} hitSlop={hitSlop} style={styles.wizardHeaderSide} accessibilityRole="button">
-              <Text style={styles.wizardHeaderAction}>Cancel</Text>
+            <TouchableOpacity onPress={requestClose} hitSlop={hitSlop} style={styles.wizardClose} accessibilityRole="button" accessibilityLabel="Cancel">
+              <Ionicons name="close" size={26} color={colors.foreground} />
             </TouchableOpacity>
             <Text style={styles.wizardHeaderTitle} numberOfLines={1}>
-              {editingPet ? 'Edit pet' : 'Add a new pet'}
+              {editingPet ? 'Edit pet' : 'New pet'}
             </Text>
-            <View style={styles.wizardHeaderSide} />
           </View>
 
           <View style={styles.progress}>
@@ -696,7 +745,7 @@ export default function MyPetsScreen() {
               ))}
             </View>
             <Text style={styles.progressText}>
-              Step {wizardStep} of {STEPS.length}: {STEPS[wizardStep - 1].label}
+              Step {wizardStep} of {STEPS.length} · {STEPS[wizardStep - 1].label}
             </Text>
           </View>
 
@@ -716,31 +765,34 @@ export default function MyPetsScreen() {
               {/* ── Step 1: Identity ── */}
               {wizardStep === 1 && (
                 <>
-                  <Text style={styles.fieldLabel}>Photo <Text style={styles.required}>*</Text></Text>
-                  <View style={styles.photoRow}>
-                    <View style={styles.photoCircle}>
-                      {hasPhoto ? (
-                        <Image source={{ uri: pendingPhotoUri || photoUrl! }} style={styles.photoImage} accessibilityLabel="Pet photo" />
-                      ) : (
-                        <Text style={styles.photoPlaceholder} numberOfLines={2} maxFontSizeMultiplier={1}>No photo</Text>
-                      )}
-                      {uploadingPhoto && (
-                        <View style={styles.photoUploadOverlay}>
-                          <ActivityIndicator color={colors.white} size="small" />
-                        </View>
-                      )}
-                    </View>
-                    <View style={styles.photoCopy}>
-                      <TouchableOpacity
-                        style={[styles.btn, styles.btnSecondary, styles.photoBtn]}
-                        onPress={() => setShowPhotoSheet(true)}
-                        activeOpacity={0.85}
-                        accessibilityRole="button"
-                      >
-                        <Text style={styles.btnSecondaryText}>{hasPhoto ? 'Change photo' : 'Add photo'}</Text>
-                      </TouchableOpacity>
-                      <Text style={styles.photoHint}>A clear photo helps our staff recognize your pet.</Text>
-                    </View>
+                  <View style={styles.photoCenter}>
+                    <TouchableOpacity
+                      onPress={() => setShowPhotoSheet(true)}
+                      activeOpacity={0.85}
+                      accessibilityRole="button"
+                      accessibilityLabel={hasPhoto ? 'Change photo' : 'Add photo'}
+                    >
+                      <View style={[styles.photoCircle, !hasPhoto && styles.photoCircleEmpty]}>
+                        {hasPhoto ? (
+                          <Image source={{ uri: pendingPhotoUri || photoUrl! }} style={styles.photoImage} accessibilityLabel="Pet photo" />
+                        ) : (
+                          <Text style={styles.photoPlaceholder} numberOfLines={2} maxFontSizeMultiplier={1}>No photo</Text>
+                        )}
+                        {uploadingPhoto && (
+                          <View style={styles.photoUploadOverlay}>
+                            <ActivityIndicator color={colors.white} size="small" />
+                          </View>
+                        )}
+                      </View>
+                      <View style={styles.photoPlus}>
+                        <Text style={styles.photoPlusText}>+</Text>
+                      </View>
+                    </TouchableOpacity>
+
+                    <TouchableOpacity onPress={() => setShowPhotoSheet(true)} hitSlop={hitSlop} accessibilityRole="button">
+                      <Text style={styles.photoLink}>{hasPhoto ? 'Change photo' : 'Add photo'} <Text style={styles.required}>*</Text></Text>
+                    </TouchableOpacity>
+                    <Text style={styles.photoHint}>A clear photo helps our staff recognize your pet.</Text>
                   </View>
 
                   <Text style={styles.fieldLabel}>Pet name <Text style={styles.required}>*</Text></Text>
@@ -754,50 +806,48 @@ export default function MyPetsScreen() {
                   <Text style={styles.fieldHint}>This is how you&apos;ll see them across the app.</Text>
 
                   <Text style={styles.fieldLabel}>Species <Text style={styles.required}>*</Text></Text>
-                  <TouchableOpacity
-                    activeOpacity={0.8}
-                    onPress={() => { setSpeciesPickerSearch(''); setShowSpeciesPicker(true); }}
-                    accessibilityRole="button"
-                    accessibilityLabel={selectedSpecies ? `Species: ${selectedSpecies}. Change species` : 'Select species'}
-                  >
-                    <View pointerEvents="none">
-                      <TextInput
-                        style={[styles.input, styles.inputWithTrailing]}
-                        value={selectedSpecies}
-                        placeholder="Select a species"
-                        placeholderTextColor={colors.mutedFg}
-                        editable={false}
-                      />
-                      <View style={styles.inputTrailingWrap}>
-                        <Text style={styles.inputTrailing}>{selectedSpecies ? 'Change' : 'Select'}</Text>
-                      </View>
+                  {clinicSpecies.length === 0 ? (
+                    <Text style={styles.fieldHint}>
+                      The clinic hasn&apos;t listed any species yet — please contact them directly.
+                    </Text>
+                  ) : (
+                    <View style={styles.chips}>
+                      {clinicSpecies.map((sp) => (
+                        <Chip
+                          key={sp.id}
+                          label={sp.name}
+                          selected={selectedSpeciesId === sp.id}
+                          onPress={() => {
+                            const same = selectedSpeciesId === sp.id;
+                            setSelectedSpecies(same ? '' : sp.name);
+                            setSelectedSpeciesId(same ? '' : sp.id);
+                            setBreed('');
+                          }}
+                        />
+                      ))}
                     </View>
-                  </TouchableOpacity>
-                  <Text style={styles.fieldHint}>
-                    Only species the clinic actually treats are listed here.
-                  </Text>
+                  )}
+                  <Text style={styles.fieldHint}>Only species the clinic actually treats are listed here.</Text>
 
                   <Text style={styles.fieldLabel}>Breed <Text style={styles.optionalText}>Optional</Text></Text>
-                  <TouchableOpacity
-                    activeOpacity={0.8}
-                    disabled={!selectedSpeciesId}
-                    onPress={() => { setBreedSearch(''); setShowBreedPicker(true); }}
-                    accessibilityRole="button"
-                    accessibilityLabel={breed ? `Breed: ${breed}. Change breed` : 'Select breed'}
-                  >
-                    <View pointerEvents="none">
-                      <TextInput
-                        style={[styles.input, styles.inputWithTrailing]}
-                        value={breed}
-                        placeholder={selectedSpeciesId ? `Select ${selectedSpecies.toLowerCase()} breed` : 'Select species first'}
-                        placeholderTextColor={colors.mutedFg}
-                        editable={false}
-                      />
-                      <View style={styles.inputTrailingWrap}>
-                        <Text style={styles.inputTrailing}>{breed ? 'Change' : 'Select'}</Text>
-                      </View>
+                  {!selectedSpeciesId ? (
+                    <Text style={styles.fieldHint}>Select a species first.</Text>
+                  ) : availableBreeds.length === 0 ? (
+                    <Text style={styles.fieldHint}>
+                      The clinic hasn&apos;t listed any breeds for {selectedSpecies.toLowerCase()} yet.
+                    </Text>
+                  ) : (
+                    <View style={styles.chips}>
+                      {availableBreeds.map((b) => (
+                        <Chip
+                          key={b.id}
+                          label={b.name}
+                          selected={breed === b.name}
+                          onPress={() => setBreed(breed === b.name ? '' : b.name)}
+                        />
+                      ))}
                     </View>
-                  </TouchableOpacity>
+                  )}
                 </>
               )}
 
@@ -829,58 +879,21 @@ export default function MyPetsScreen() {
                     placeholder="e.g. 3"
                     placeholderTextColor={colors.mutedFg}
                   />
-                  {/* Weight used to live here, owner-entered — removed
-                      entirely, not just made optional. Grooming
-                      pricing depends on actual weight, and a number an
-                      owner guesses at home isn't real, usable data the
-                      same way a scale reading at the clinic is. This
-                      is now the clinic's own value to record, not the
-                      owner's to estimate. */}
-
-                  <Text style={styles.fieldLabel}>Color / markings <Text style={styles.optionalText}>Optional</Text></Text>
-                  <TextInput
-                    style={styles.input}
-                    placeholder="e.g. Brown with white spots"
-                    placeholderTextColor={colors.mutedFg}
-                    value={color}
-                    onChangeText={setColor}
-                  />
-
-                  <Text style={styles.fieldLabel}>Note <Text style={styles.optionalText}>Optional</Text></Text>
-                  <TextInput
-                    style={[styles.input, styles.noteInput]}
-                    placeholder="e.g. Loves to play fetch and go for long walks"
-                    placeholderTextColor={colors.mutedFg}
-                    value={notes}
-                    onChangeText={setNotes}
-                    multiline
-                  />
                 </>
               )}
 
-              {/* ── Step 3: Review (the same row the list uses) ── */}
+              {/* ── Step 3: Review ── */}
               {wizardStep === 3 && (
                 <>
-                  <Text style={styles.reviewIntro}>Here&apos;s how {name || 'your pet'} will appear in My Pets:</Text>
-                  <View style={styles.reviewList} pointerEvents="none">
-                    <PetRow
-                      photoUri={pendingPhotoUri || photoUrl}
-                      name={name}
-                      species={selectedSpecies}
-                      breed={breed}
-                      gender={selectedGender}
-                      age={age}
-                      weight={editingPet?.weight}
-                      neutered={neutered}
-                      note={notes}
-                    />
-                  </View>
-                  {color ? (
-                    <View style={styles.reviewRow}>
-                      <Text style={styles.reviewRowLabel}>Color / markings</Text>
-                      <Text style={styles.reviewRowValue}>{color}</Text>
-                    </View>
-                  ) : null}
+                  <ReviewProfile
+                    photoUri={pendingPhotoUri || photoUrl}
+                    name={name}
+                    species={selectedSpecies}
+                    breed={breed}
+                    gender={selectedGender}
+                    age={age}
+                    neutered={neutered}
+                  />
                   <Text style={styles.reviewFooterNote}>You can edit every detail later.</Text>
                 </>
               )}
@@ -900,9 +913,9 @@ export default function MyPetsScreen() {
               </TouchableOpacity>
             )}
             <TouchableOpacity
-              style={[styles.btn, styles.btnPrimary, styles.footerPrimary, isSubmitting && styles.btnDisabled]}
+              style={[styles.btn, styles.btnPrimary, styles.footerPrimary, isSubmitting && styles.btnDisabled, !stepValid && styles.btnBlocked]}
               onPress={wizardStep < 3 ? goNextStep : handleSubmit}
-              disabled={isSubmitting}
+              disabled={isSubmitting || !stepValid}
               activeOpacity={0.85}
               accessibilityRole="button"
             >
@@ -916,99 +929,6 @@ export default function MyPetsScreen() {
             </TouchableOpacity>
           </View>
         </KeyboardAvoidingView>
-      </Modal>
-
-      {/* ── Breed picker ── */}
-      <Modal visible={showBreedPicker} animationType="slide" transparent onRequestClose={() => setShowBreedPicker(false)}>
-        <View style={styles.sheetOverlay}>
-          <Pressable style={StyleSheet.absoluteFill} onPress={() => setShowBreedPicker(false)} accessibilityLabel="Close" />
-          <View style={[styles.sheet, styles.sheetTall, { paddingBottom: insets.bottom + space.lg }]}>
-            <View style={styles.sheetHandle} />
-            <View style={styles.sheetHeader}>
-              <Text style={styles.sheetTitleInline} numberOfLines={1}>Select {selectedSpecies.toLowerCase()} breed</Text>
-              <TouchableOpacity onPress={() => setShowBreedPicker(false)} hitSlop={hitSlop} accessibilityRole="button">
-                <Text style={styles.sheetHeaderAction}>Close</Text>
-              </TouchableOpacity>
-            </View>
-
-            <TextInput
-              style={styles.input}
-              placeholder="Search breeds"
-              placeholderTextColor={colors.mutedFg}
-              value={breedSearch}
-              onChangeText={setBreedSearch}
-              autoCorrect={false}
-            />
-
-            <ScrollView style={styles.breedList} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
-              {availableBreeds.length === 0 ? (
-                <Text style={styles.fieldHint}>
-                  The clinic hasn&apos;t listed any breeds for {selectedSpecies.toLowerCase()} yet — please contact them directly.
-                </Text>
-              ) : filteredBreeds.length === 0 ? (
-                <Text style={styles.fieldHint}>Nothing matches that search.</Text>
-              ) : (
-                filteredBreeds.map((b) => (
-                  <SheetRow
-                    key={b.id}
-                    label={b.name}
-                    selected={breed === b.name}
-                    onPress={() => { setBreed(b.name); setShowBreedPicker(false); }}
-                  />
-                ))
-              )}
-            </ScrollView>
-          </View>
-        </View>
-      </Modal>
-
-      {/* ── Species picker — real clinic-managed list, not free text ── */}
-      <Modal visible={showSpeciesPicker} animationType="slide" transparent onRequestClose={() => setShowSpeciesPicker(false)}>
-        <View style={styles.sheetOverlay}>
-          <Pressable style={StyleSheet.absoluteFill} onPress={() => setShowSpeciesPicker(false)} accessibilityLabel="Close" />
-          <View style={[styles.sheet, styles.sheetTall, { paddingBottom: insets.bottom + space.lg }]}>
-            <View style={styles.sheetHandle} />
-            <View style={styles.sheetHeader}>
-              <Text style={styles.sheetTitleInline} numberOfLines={1}>Select species</Text>
-              <TouchableOpacity onPress={() => setShowSpeciesPicker(false)} hitSlop={hitSlop} accessibilityRole="button">
-                <Text style={styles.sheetHeaderAction}>Close</Text>
-              </TouchableOpacity>
-            </View>
-
-            <TextInput
-              style={styles.input}
-              placeholder="Search species"
-              placeholderTextColor={colors.mutedFg}
-              value={speciesPickerSearch}
-              onChangeText={setSpeciesPickerSearch}
-              autoCorrect={false}
-            />
-
-            <ScrollView style={styles.breedList} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
-              {clinicSpecies.length === 0 ? (
-                <Text style={styles.fieldHint}>
-                  The clinic hasn&apos;t listed any species yet — please contact them directly.
-                </Text>
-              ) : (
-                clinicSpecies
-                  .filter((sp) => sp.name.toLowerCase().includes(speciesPickerSearch.toLowerCase()))
-                  .map((sp) => (
-                    <SheetRow
-                      key={sp.id}
-                      label={sp.name}
-                      selected={selectedSpeciesId === sp.id}
-                      onPress={() => {
-                        setSelectedSpecies(sp.name);
-                        setSelectedSpeciesId(sp.id);
-                        setBreed('');
-                        setShowSpeciesPicker(false);
-                      }}
-                    />
-                  ))
-              )}
-            </ScrollView>
-          </View>
-        </View>
       </Modal>
 
       {/* ── Photo sheet ── */}
@@ -1030,8 +950,10 @@ export default function MyPetsScreen() {
 }
 
 const AVATAR = 56;
-const PHOTO = 80;
+const PHOTO = 112;
 const CONTROL_H = 44;
+const BUTTON_H = 48;
+const FIELD_RADIUS = 10;
 
 const styles = StyleSheet.create({
   container: { ...common.screen },
@@ -1039,70 +961,95 @@ const styles = StyleSheet.create({
   // Clears the floating tab bar, which this screen shows.
   scrollContent: { paddingBottom: TAB_BAR_CLEARANCE },
 
-  /* ── Count and add (under the shared header) ── */
-  summaryRow: {
+  /* ── Header ── */
+  header: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: space.lg,
-    paddingHorizontal: space.xxl,
-    paddingTop: space.lg,
-    paddingBottom: space.sm,
+    gap: space.md,
+    paddingHorizontal: space.xl,
+    paddingBottom: space.md,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border,
+    backgroundColor: colors.background,
   },
-  headerCopy: { flex: 1, minWidth: 0 },
-  subtitle: { ...text.small, color: colors.mutedFg },
+  headerBack: { minHeight: CONTROL_H, justifyContent: 'center' },
+  headerTitle: { flex: 1, fontFamily: fonts.bodyBold, fontSize: 22, color: colors.foreground },
+  count: { ...text.small, color: colors.mutedFg, paddingHorizontal: space.xxl, paddingTop: space.md },
 
-  /* ── Buttons: one set, same as the rest of the app ── */
+  /* ── Buttons ── */
+  /* Every full-width button: 48px, fully rounded. Primary is solid navy
+     (Continue, Save changes, Add pet, Add your first pet). Secondary is a
+     navy outline (Back, Cancel, Clear search). Red is only for deleting. */
   btn: {
-    minHeight: 48,
-    borderRadius: radius.md,
+    height: BUTTON_H,
+    borderRadius: BUTTON_H / 2,
     paddingHorizontal: space.xl,
     alignItems: 'center',
     justifyContent: 'center',
   },
   btnPrimary: { backgroundColor: colors.primary },
-  btnPrimaryText: { ...text.smallBold, color: colors.primaryFg },
-  btnSecondary: { borderWidth: 1, borderColor: colors.border, backgroundColor: 'transparent' },
-  btnSecondaryText: { ...text.smallBold, color: colors.foreground },
+  btnPrimaryText: { ...text.bodyBold, color: colors.primaryFg },
+  btnSecondary: {
+    backgroundColor: 'transparent',
+    borderWidth: 1.5,
+    borderColor: colors.primary,
+  },
+  btnSecondaryText: { ...text.bodyBold, color: colors.primary },
   btnDisabled: { opacity: 0.6 },
+  btnBlocked: { opacity: 0.4 },
+
+  /* Add pet: the one solid navy button, a 48px pill with a plus. */
   addBtn: {
-    minHeight: CONTROL_H,
-    borderRadius: radius.md,
-    paddingHorizontal: space.xl,
+    height: BUTTON_H,
+    borderRadius: BUTTON_H / 2,
+    paddingLeft: space.md,
+    paddingRight: space.lg,
     backgroundColor: colors.primary,
+    flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
+    gap: 6,
   },
   addBtnText: { ...text.smallBold, color: colors.primaryFg },
 
-  /* ── Search and sort ── */
-  toolbar: { paddingHorizontal: space.xxl, marginTop: space.sm },
+  /* ── Search: a filled field, no outline ── */
+  toolbar: { paddingHorizontal: space.xxl, marginTop: space.lg },
   searchWrap: {
     flexDirection: 'row',
     alignItems: 'center',
     minHeight: CONTROL_H,
-    borderRadius: radius.md,
-    borderWidth: 1,
-    borderColor: colors.border,
-    backgroundColor: colors.card,
+    borderRadius: FIELD_RADIUS,
+    backgroundColor: colors.muted,
     paddingHorizontal: space.md,
   },
   searchInput: { flex: 1, fontSize: 14, color: colors.foreground, fontFamily: fonts.body, paddingVertical: 0 },
   clearText: { ...text.smallBold, color: colors.primary, marginLeft: space.sm },
 
+  /* ── Segmented control: grey track, the chosen option is a raised pill ── */
   segmented: {
     flexDirection: 'row',
-    borderRadius: radius.md,
-    borderWidth: 1,
-    borderColor: colors.border,
-    backgroundColor: colors.card,
-    overflow: 'hidden',
+    borderRadius: FIELD_RADIUS,
+    backgroundColor: colors.muted,
+    padding: 3,
   },
-  segment: { flex: 1, minHeight: CONTROL_H, alignItems: 'center', justifyContent: 'center', paddingHorizontal: space.sm },
-  segmentDivider: { borderLeftWidth: 1, borderLeftColor: colors.border },
-  segmentActive: { backgroundColor: colors.primary },
-  segmentText: { fontSize: 13, fontFamily: fonts.bodyMedium, color: colors.foreground },
-  segmentTextActive: { color: colors.primaryFg, fontFamily: fonts.bodyBold },
+  segment: {
+    flex: 1,
+    minHeight: CONTROL_H - 6,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: space.sm,
+    borderRadius: FIELD_RADIUS - 2,
+  },
+  segmentActive: {
+    backgroundColor: colors.card,
+    shadowColor: '#000',
+    shadowOpacity: 0.15,
+    shadowRadius: 3,
+    shadowOffset: { width: 0, height: 1 },
+    elevation: 2,
+  },
+  segmentText: { fontSize: 13, fontFamily: fonts.bodyMedium, color: colors.mutedFg },
+  segmentTextActive: { color: colors.foreground, fontFamily: fonts.bodyBold },
 
   /* ── States ── */
   loadErrorBox: {
@@ -1122,44 +1069,40 @@ const styles = StyleSheet.create({
   emptyText: { ...text.small, color: colors.mutedFg, textAlign: 'center', marginTop: space.sm },
   emptyBtn: { alignSelf: 'stretch', marginTop: space.xl },
 
-  /* ── Pet list: flat rows between hairlines, like the profile screen ── */
-  list: {
-    marginHorizontal: space.xxl,
-    marginTop: space.xl,
-    borderTopWidth: 1,
-    borderTopColor: colors.border,
-  },
+  /* ── Pet list: flat rows ── */
+  list: { marginTop: space.lg },
   row: {
     flexDirection: 'row',
-    alignItems: 'flex-start',
+    alignItems: 'center',
     gap: space.lg,
-    paddingVertical: space.lg,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.border,
-  },
-  avatar: {
-    width: AVATAR,
-    height: AVATAR,
-    borderRadius: AVATAR / 2,
-    borderWidth: 2,
-    borderColor: colors.secondary,
+    paddingHorizontal: space.xxl,
+    paddingVertical: space.md,
   },
   avatarFallback: {
-    width: AVATAR,
-    height: AVATAR,
-    borderRadius: AVATAR / 2,
     backgroundColor: colors.secondary,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  avatarInitial: { fontFamily: text.display.fontFamily, fontSize: 22, color: colors.primary },
+  avatarInitial: { fontFamily: text.display.fontFamily, color: colors.primary },
   rowMain: { flex: 1, minWidth: 0 },
-  rowTitleLine: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  rowName: { ...text.bodyBold, fontSize: 16, color: colors.foreground, flexShrink: 1, marginRight: space.md },
-  manageText: { ...text.smallBold, color: colors.primary },
+  rowName: { ...text.bodyBold, fontSize: 16, color: colors.foreground },
   rowSub: { ...text.small, color: colors.mutedFg, marginTop: 2 },
   rowMeta: { ...text.caption, color: colors.mutedFg, marginTop: 2 },
-  rowNote: { ...text.caption, color: colors.mutedFg, marginTop: space.sm },
+
+  /* Manage: secondary style, a 48px navy outlined pill with a chevron. */
+  manageBtn: {
+    height: BUTTON_H,
+    borderRadius: BUTTON_H / 2,
+    paddingHorizontal: space.md,
+    borderWidth: 1.5,
+    borderColor: colors.primary,
+    backgroundColor: 'transparent',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 4,
+  },
+  manageText: { ...text.smallBold, color: colors.primary },
 
   /* ── Sheets ── */
   sheetOverlay: { flex: 1, backgroundColor: colors.overlay, justifyContent: 'flex-end' },
@@ -1170,12 +1113,8 @@ const styles = StyleSheet.create({
     paddingHorizontal: space.xxl,
     paddingTop: space.lg,
   },
-  sheetTall: { maxHeight: '80%' },
   sheetHandle: { width: 36, height: 4, borderRadius: 2, backgroundColor: colors.border, alignSelf: 'center', marginBottom: space.lg },
   sheetTitle: { fontFamily: fonts.bodyBold, fontSize: 16, color: colors.foreground, marginBottom: space.sm },
-  sheetTitleInline: { fontFamily: fonts.bodyBold, fontSize: 16, color: colors.foreground, flexShrink: 1, marginRight: space.md },
-  sheetHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: space.md },
-  sheetHeaderAction: { ...text.smallBold, color: colors.primary },
   sheetRow: {
     minHeight: 52,
     flexDirection: 'row',
@@ -1189,27 +1128,23 @@ const styles = StyleSheet.create({
   sheetRowTag: { ...text.caption, color: colors.primary, marginLeft: space.md },
   destructiveText: { color: colors.destructive },
   sheetCancel: { marginTop: space.lg },
-  breedList: { marginTop: space.sm },
 
   /* ── Wizard ── */
   wizardContainer: { ...common.screen },
   wizardHeader: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
+    gap: space.md,
     paddingHorizontal: space.xxl,
-    paddingBottom: space.md,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.border,
+    paddingBottom: space.sm,
   },
-  wizardHeaderSide: { minWidth: 88, minHeight: CONTROL_H - 8, justifyContent: 'center' },
-  wizardHeaderAction: { ...text.smallBold, color: colors.foreground },
-  wizardHeaderTitle: { flex: 1, textAlign: 'center', fontFamily: fonts.bodyBold, fontSize: 16, color: colors.foreground },
+  wizardClose: { minHeight: CONTROL_H - 8, justifyContent: 'center' },
+  wizardHeaderTitle: { flex: 1, fontFamily: fonts.bodyBold, fontSize: 22, color: colors.foreground },
 
   progress: { paddingHorizontal: space.xxl, paddingTop: space.lg, paddingBottom: space.sm },
   progressBars: { flexDirection: 'row', gap: 6 },
-  progressBar: { flex: 1, height: 4, borderRadius: 2, backgroundColor: colors.border },
-  progressBarOn: { backgroundColor: colors.primary },
+  progressBar: { flex: 1, height: 3, borderRadius: 2, backgroundColor: colors.border },
+  progressBarOn: { backgroundColor: colors.foreground },
   progressText: { ...text.caption, color: colors.mutedFg, marginTop: space.sm },
 
   wizardScroll: { flex: 1 },
@@ -1227,50 +1162,80 @@ const styles = StyleSheet.create({
   optionalText: { color: colors.mutedFg, fontFamily: fonts.body, fontSize: 11 },
   fieldHint: { ...text.caption, color: colors.mutedFg, marginTop: space.sm },
 
-  input: { ...common.input, height: undefined, minHeight: 52, paddingVertical: 10 },
-  inputWithTrailing: { paddingRight: 84 },
-  inputTrailingWrap: { position: 'absolute', right: space.md, top: 0, bottom: 0, justifyContent: 'center' },
-  inputTrailing: { ...text.smallBold, color: colors.primary },
-  noteInput: { height: 96, textAlignVertical: 'top' },
+  /* Filled fields, no outline */
+  input: {
+    ...common.input,
+    height: undefined,
+    minHeight: 52,
+    paddingVertical: 10,
+    backgroundColor: colors.muted,
+    borderWidth: 0,
+    borderRadius: FIELD_RADIUS,
+  },
 
-  photoRow: { flexDirection: 'row', alignItems: 'center', gap: space.lg },
+  /* Species and breed chips */
+  chips: { flexDirection: 'row', flexWrap: 'wrap', gap: space.sm },
+  chip: { backgroundColor: colors.muted, borderRadius: 999, paddingHorizontal: space.lg, paddingVertical: space.sm + 1 },
+  chipOn: { backgroundColor: colors.foreground },
+  chipText: { fontSize: 14, fontFamily: fonts.bodyMedium, color: colors.foreground },
+  chipTextOn: { color: colors.background },
+
+  /* Photo: one big round picture, centred, with a + badge */
+  photoCenter: { alignItems: 'center', paddingTop: space.lg, gap: space.sm },
   photoCircle: {
     width: PHOTO,
     height: PHOTO,
     borderRadius: PHOTO / 2,
-    backgroundColor: colors.secondary,
+    backgroundColor: colors.muted,
     alignItems: 'center',
     justifyContent: 'center',
     overflow: 'hidden',
   },
+  photoCircleEmpty: { borderWidth: 2, borderStyle: 'dashed', borderColor: colors.border },
   photoImage: { width: PHOTO, height: PHOTO },
   photoPlaceholder: { ...text.caption, color: colors.mutedFg, textAlign: 'center', paddingHorizontal: 6 },
   photoUploadOverlay: {
-  position: 'absolute',
-  top: 0,
-  left: 0,
-  right: 0,
-  bottom: 0,
-  backgroundColor: colors.overlay,
-  alignItems: 'center',
-  justifyContent: 'center',
-  },
-  photoCopy: { flex: 1, minWidth: 0 },
-  photoBtn: { minHeight: CONTROL_H, alignSelf: 'flex-start' },
-  photoHint: { ...text.caption, color: colors.mutedFg, marginTop: space.sm },
-
-  reviewIntro: { ...text.small, color: colors.mutedFg, marginTop: space.lg, marginBottom: space.md },
-  reviewList: { borderTopWidth: 1, borderTopColor: colors.border },
-  reviewRow: {
-    flexDirection: 'row',
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: colors.overlay,
     alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingVertical: space.lg,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.border,
+    justifyContent: 'center',
   },
-  reviewRowLabel: { ...text.small, color: colors.mutedFg },
-  reviewRowValue: { ...text.smallBold, color: colors.foreground, flexShrink: 1, textAlign: 'right', marginLeft: space.md },
+  photoPlus: {
+    position: 'absolute',
+    right: 2,
+    bottom: 2,
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    backgroundColor: colors.primary,
+    borderWidth: 3,
+    borderColor: colors.background,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  photoPlusText: { color: colors.primaryFg, fontSize: 18, lineHeight: 20, fontFamily: fonts.bodyBold },
+  photoLink: { ...text.smallBold, color: colors.primary },
+  photoHint: { ...text.caption, color: colors.mutedFg, textAlign: 'center' },
+
+  /* Review: a small profile */
+  profile: { alignItems: 'center', paddingTop: space.xl },
+  profileName: { fontFamily: fonts.bodyBold, fontSize: 22, color: colors.foreground, marginTop: space.lg },
+  profileSub: { ...text.small, color: colors.mutedFg, marginTop: 2 },
+  stats: {
+    flexDirection: 'row',
+    alignSelf: 'stretch',
+    marginTop: space.xl,
+    borderTopWidth: 1,
+    borderBottomWidth: 1,
+    borderColor: colors.border,
+  },
+  stat: { flex: 1, alignItems: 'center', paddingVertical: space.lg, paddingHorizontal: 4 },
+  statValue: { fontFamily: fonts.bodyBold, fontSize: 16, color: colors.foreground },
+  statLabel: { ...text.caption, color: colors.mutedFg, marginTop: 2 },
   reviewFooterNote: { ...text.caption, color: colors.mutedFg, textAlign: 'center', marginTop: space.xl },
 
   wizardFooter: {
@@ -1294,7 +1259,7 @@ function PetListSkeleton() {
     <View style={styles.list} accessibilityLabel="Loading your pets" accessibilityLiveRegion="polite">
       {[0, 1, 2, 3].map((i) => (
         <View key={i} style={styles.row}>
-          <Skeleton width={AVATAR} height={AVATAR} radius={AVATAR / 2} />
+          <Skeleton width={AVATAR + 12} height={AVATAR + 12} radius={(AVATAR + 12) / 2} />
           <View style={styles.rowMain}>
             <Skeleton width="45%" height={16} />
             <Skeleton width="60%" height={13} style={{ marginTop: 8 }} />

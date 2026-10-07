@@ -1,5 +1,8 @@
+import '../lib/ignoreDevWarnings';
+import '../lib/reanimatedLogger';
 import { useEffect, useRef, useState } from 'react';
-import { LogBox, Platform, StyleSheet, View } from 'react-native';
+import { LogBox, Platform, StyleSheet } from 'react-native';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { Stack, useRouter, useRootNavigationState } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import { useFonts } from 'expo-font';
@@ -18,6 +21,7 @@ import { registerForPushNotifications } from '../lib/notifications';
 import { syncProviderAvatar } from '../lib/avatarHistory';
 import { colors } from '../constants/theme';
 import '../lib/capFontScale';
+import { hasSeenIntro } from '../utils/firstLaunch';
 
 if (Platform.OS === 'web' && typeof document !== 'undefined') {
   const style = document.createElement('style');
@@ -33,6 +37,7 @@ LogBox.ignoreLogs([
   'Ionicons',
   'fontFamily',
   'Font',
+  '[Reanimated] Reading from value during component render',
 ]);
 
 /* If working out where to send the person takes longer than this (no
@@ -110,6 +115,10 @@ export default function RootLayout() {
              to a form it already filled in is worse than letting it
              through. */
           if (!error && !client?.phone) destination = '/complete-profile';
+        } else {
+          /* Signed out: first launch goes through the intro pager once,
+             after that straight to the welcome screen. */
+          destination = (await hasSeenIntro()) ? '/' : '/intro';
         }
       } catch {
         // A stale/corrupt session must not leave the app on a blank screen.
@@ -162,8 +171,8 @@ export default function RootLayout() {
   if (!fontsReady) return null;
 
   return (
-    <KeyboardProvider>
-      <View style={styles.root}>
+    <KeyboardProvider statusBarTranslucent navigationBarTranslucent>
+      <GestureHandlerRootView style={styles.root}>
         <Stack
           screenOptions={{
             headerShown: false,
@@ -172,15 +181,16 @@ export default function RootLayout() {
           }}
         >
           <Stack.Screen name="index" />
-          <Stack.Screen name="signin" />
-          <Stack.Screen name="forgot-password" />
+          <Stack.Screen name="intro" />
+          <Stack.Screen name="signin"/>
+          <Stack.Screen name="forgot-password" options={{ animation: 'none', }}/>
           <Stack.Screen name="register" />
           <Stack.Screen name="complete-profile" />
           <Stack.Screen name="services" />
           <Stack.Screen name="profile-photo" />
           <Stack.Screen name="(tabs)" />
         </Stack>
-      </View>
+      </GestureHandlerRootView>
     </KeyboardProvider>
   );
 }

@@ -17,6 +17,7 @@ import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
   AlertCircle,
+  Circle,
   CheckCircle2,
   XCircle,
   Eye,
@@ -24,10 +25,22 @@ import {
   ShieldCheck,
 } from 'lucide-react-native';
 import { supabase } from '../../lib/supabase';
-import { PASSWORD_HINT, passwordProblem } from '../../lib/passwordPolicy';
+import { passwordProblem } from '../../lib/passwordPolicy';
 import { colors, status, text, space, radius, shadow, common, hitSlop } from '../../constants/theme';
 import { Skeleton } from '../../components/Skeleton';
 import { ScreenHeader } from '../../components/ScreenHeader';
+
+/* The rules shown under "New password". They mirror lib/passwordPolicy.ts
+   (12+ characters, upper, lower, number, symbol). This list only gives
+   live feedback while typing; passwordProblem() stays the real check on
+   submit, so if the policy changes, update both. */
+const PASSWORD_RULES: { label: string; test: (v: string) => boolean }[] = [
+  { label: 'At least 12 characters', test: (v) => v.length >= 12 },
+  { label: 'An uppercase letter', test: (v) => /[A-Z]/.test(v) },
+  { label: 'A lowercase letter', test: (v) => /[a-z]/.test(v) },
+  { label: 'A number', test: (v) => /[0-9]/.test(v) },
+  { label: 'A symbol', test: (v) => /[^A-Za-z0-9]/.test(v) },
+];
 
 /* One password field, used three times. It owns its own show/hide and
    focus state, so the screen only has to care about the values. */
@@ -223,7 +236,7 @@ export default function SecurityScreen() {
     <View style={styles.container}>
       <StatusBar barStyle="dark-content" backgroundColor={colors.background} />
 
-      <ScreenHeader title="Security" onBack={goBack} />
+      <ScreenHeader title="Security" onBack={goBack} large />
 
       <KeyboardAvoidingView
         style={styles.flex}
@@ -261,20 +274,42 @@ export default function SecurityScreen() {
                   onSubmitEditing={() => newRef.current?.focus()}
                 />
 
-                <View style={styles.divider} />
+                <View>
+                  <PasswordField
+                    label="New password"
+                    value={newPassword}
+                    onChangeText={edit(setNewPassword)}
+                    placeholder="Enter new password"
+                    autoComplete="new-password"
+                    textContentType="newPassword"
+                    inputRef={newRef}
+                    returnKeyType="next"
+                    onSubmitEditing={() => confirmRef.current?.focus()}
+                  />
 
-                <PasswordField
-                  label="New password"
-                  value={newPassword}
-                  onChangeText={edit(setNewPassword)}
-                  placeholder="Enter new password"
-                  hint={PASSWORD_HINT}
-                  autoComplete="new-password"
-                  textContentType="newPassword"
-                  inputRef={newRef}
-                  returnKeyType="next"
-                  onSubmitEditing={() => confirmRef.current?.focus()}
-                />
+                  {/* Ticks off as the person types. Icon and colour both
+                      change, so it doesn't rely on colour alone. */}
+                  <View style={styles.rules}>
+                    {PASSWORD_RULES.map((rule) => {
+                      const met = rule.test(newPassword);
+                      return (
+                        <View
+                          key={rule.label}
+                          style={styles.ruleRow}
+                          accessible
+                          accessibilityLabel={`${rule.label}, ${met ? 'met' : 'not met'}`}
+                        >
+                          {met
+                            ? <CheckCircle2 size={15} color={colors.primary} strokeWidth={2} />
+                            : <Circle size={15} color={colors.mutedFg} strokeWidth={1.8} />}
+                          <Text style={[styles.ruleText, met && styles.ruleTextMet]}>
+                            {rule.label}
+                          </Text>
+                        </View>
+                      );
+                    })}
+                  </View>
+                </View>
 
                 <View>
                   <PasswordField
@@ -339,7 +374,7 @@ export default function SecurityScreen() {
           ) : (
             <View style={styles.providerNotice}>
               <View style={styles.providerIcon}>
-                <ShieldCheck size={19} color={colors.primary} strokeWidth={1.9} />
+                <ShieldCheck size={20} color={colors.primary} strokeWidth={1.9} />
               </View>
               <View style={styles.providerCopy}>
                 <Text style={styles.providerTitle}>Signed in with Google</Text>
@@ -379,7 +414,6 @@ const styles = StyleSheet.create({
   errorText: { ...text.small, color: status.danger.fg, flex: 1 },
 
   card: { ...common.card, gap: space.lg },
-  divider: { ...common.divider },
 
   label: { ...common.label },
   inputWrap: {
@@ -397,6 +431,11 @@ const styles = StyleSheet.create({
   input: { flex: 1, ...text.body, color: colors.foreground, padding: 0 },
   hint: { ...text.caption, color: colors.mutedFg, marginTop: space.xs },
 
+  rules: { gap: 6, marginTop: space.md },
+  ruleRow: { flexDirection: 'row', alignItems: 'center', gap: space.sm },
+  ruleText: { ...text.caption, color: colors.mutedFg },
+  ruleTextMet: { color: colors.primary },
+
   matchRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -413,25 +452,25 @@ const styles = StyleSheet.create({
   saveBtnBusy: { opacity: 0.75 },
   saveBtnText: { ...common.buttonPrimaryText },
 
+  /* Same card and beige icon circle as the Profile tiles. */
   providerNotice: {
+    ...common.card,
     flexDirection: 'row',
     alignItems: 'center',
     gap: space.md,
-    backgroundColor: colors.secondary,
-    borderRadius: radius.card,
     padding: space.lg,
   },
   providerIcon: {
-    width: 40,
-    height: 40,
-    borderRadius: radius.md,
-    backgroundColor: colors.card,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: colors.muted,
     alignItems: 'center',
     justifyContent: 'center',
   },
   providerCopy: { flex: 1 },
-  providerTitle: { ...text.bodyBold, color: colors.secondaryFg },
-  providerSub: { ...text.caption, color: colors.secondaryFg, marginTop: 2 },
+  providerTitle: { ...text.bodyBold, color: colors.foreground },
+  providerSub: { ...text.caption, color: colors.mutedFg, marginTop: 2 },
 });
 
 /* ── Loading state ──

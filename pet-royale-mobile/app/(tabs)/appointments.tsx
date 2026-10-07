@@ -13,7 +13,6 @@ import {
 } from 'react-native';
 import { supabase } from '../../lib/supabase';
 import { useFocusEffect, useRouter } from 'expo-router';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
   CalendarDays, CalendarPlus, Clock, Phone,
   Receipt, X, ChevronRight, XCircle, AlertCircle,
@@ -21,7 +20,7 @@ import {
 import {
   colors, text, fonts, space, radius, shadow, common, hitSlop, status,
 } from '../../constants/theme';
-import { TAB_BAR_CLEARANCE } from './_layout';
+import { useTabBarClearance } from '../../lib/useTabBarClearance';
 import { Skeleton } from '../../components/Skeleton';
 import { PillTabs } from '../../components/PillTabs';
 import { ReceiptModal } from '../../components/ReceiptModal';
@@ -65,7 +64,7 @@ const HISTORY_GROUPS = ['New', 'Previous', 'Older'] as const;
 
 export default function AppointmentsScreen() {
   const router = useRouter();
-  const insets = useSafeAreaInsets();
+  const bottomPad = useTabBarClearance();
   const [tab, setTab] = useState<'upcoming' | 'past'>('upcoming');
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -172,14 +171,16 @@ export default function AppointmentsScreen() {
           .filter((s) => s.items.length > 0);
   const isEmpty = (tab === 'upcoming' ? upcoming : past).length === 0;
 
+  /* Two steps, like the mockup: tapping "Cancel booking" asks first, and
+     only "Yes, cancel" actually cancels. Red is kept for that step. */
   const cancelBooking = (visit: any) => {
     Alert.alert(
       'Cancel this booking?',
       `${visit.pet_name}'s ${visit.service} on ${fmtDate(visit.requested_date)}. The slot goes back to the clinic.`,
       [
-        { text: 'Keep it', style: 'cancel' },
+        { text: 'Keep booking', style: 'cancel' },
         {
-          text: 'Cancel booking',
+          text: 'Yes, cancel',
           style: 'destructive',
           onPress: async () => {
             setCancelling(visit.id);
@@ -210,8 +211,8 @@ export default function AppointmentsScreen() {
   return (
     <View style={styles.container}>
       <StatusBar barStyle="dark-content" backgroundColor={colors.background} />
-      <View style={[styles.header, { paddingTop: insets.top + space.md }]}>
-        <Text style={styles.title}>My visits</Text>
+      <View style={styles.header}>
+        <Text style={styles.title} accessibilityRole="header">My visits</Text>
         <View style={styles.tabsWrap}>
           <PillTabs
             tabs={[
@@ -229,7 +230,7 @@ export default function AppointmentsScreen() {
            largest display and font sizes. */
         contentContainerStyle={[
           styles.scroll,
-          { paddingBottom: TAB_BAR_CLEARANCE + space.xxxl },
+          { paddingBottom: bottomPad + space.xxxl },
         ]}
         showsVerticalScrollIndicator={false}
         refreshControl={
@@ -254,7 +255,7 @@ export default function AppointmentsScreen() {
               !loadError && (
                 <View style={styles.empty}>
                   <View style={styles.emptyIcon}>
-                    <CalendarDays size={26} color={colors.primary} />
+                    <CalendarDays size={26} color={colors.primary} strokeWidth={1.9} />
                   </View>
                   <Text style={styles.emptyTitle}>
                     {tab === 'upcoming' ? 'Nothing booked' : 'No past visits'}
@@ -303,7 +304,7 @@ export default function AppointmentsScreen() {
                             </Text>
                             {time ? (
                               <View style={styles.timeRow}>
-                                <Clock size={12} color={colors.mutedFg} />
+                                <Clock size={14} color={colors.mutedFg} />
                                 <Text style={styles.timeText}>{time}</Text>
                               </View>
                             ) : null}
@@ -342,10 +343,10 @@ export default function AppointmentsScreen() {
                                 accessibilityLabel="Cancel booking"
                               >
                                 {cancelling === visit.id ? (
-                                  <ActivityIndicator size="small" color={colors.destructive} />
+                                  <ActivityIndicator size="small" color={status.danger.fg} />
                                 ) : (
                                   <>
-                                    <XCircle size={14} color={status.danger.fg} />
+                                    <XCircle size={20} color={status.danger.fg} strokeWidth={2} />
                                     <Text style={styles.cancelBtnText}>Cancel booking</Text>
                                   </>
                                 )}
@@ -378,12 +379,14 @@ export default function AppointmentsScreen() {
                           >
                             <View style={styles.billRow}>
                               <View style={styles.metaRow}>
-                                <Receipt size={14} color={colors.mutedFg} />
+                                <View style={styles.billIcon}>
+                                  <Receipt size={16} color={colors.primary} strokeWidth={1.9} />
+                                </View>
                                 <Text style={styles.billTotal}>{peso(invoice.total)}</Text>
                               </View>
                               <View style={styles.viewReceiptRow}>
                                 <Text style={styles.viewReceiptText}>View receipt</Text>
-                                <ChevronRight size={13} color={colors.primary} />
+                                <ChevronRight size={16} color={colors.primary} strokeWidth={2} />
                               </View>
                             </View>
                           </TouchableOpacity>
@@ -420,27 +423,37 @@ export default function AppointmentsScreen() {
 const styles = StyleSheet.create({
   container: { ...common.screen },
   center: { alignItems: 'center', justifyContent: 'center' },
+
+  /* Same title and side padding as Profile: 24 / bold, 24dp from the
+     edge, sitting just under the status bar. */
   header: {
-    paddingHorizontal: space.xl,
+    paddingHorizontal: space.xxl,
+    paddingTop: space.xs,
     paddingBottom: space.md,
     backgroundColor: colors.background,
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: colors.border,
   },
-  title: { ...text.display, color: colors.foreground },
+  title: {
+    fontFamily: fonts.bodyBold,
+    fontSize: 24,
+    lineHeight: 28,
+    letterSpacing: 0,
+    color: colors.foreground,
+  },
   tabsWrap: { marginTop: space.lg },
 
-  scroll: { paddingHorizontal: space.xl, paddingTop: space.xl, gap: space.md },
+  scroll: { paddingHorizontal: space.xxl, paddingTop: space.xl, gap: space.md },
 
   /* History group headers: New / Previous / Older, with a count. */
   section: { gap: space.md },
   sectionHead: { flexDirection: 'row', alignItems: 'center', gap: space.sm },
-  sectionTitle: { ...text.bodyBold, fontSize: 14, color: colors.mutedFg },
+  sectionTitle: { ...text.bodyBold, fontSize: 16, color: colors.mutedFg },
   sectionCount: {
-    minWidth: 22,
-    height: 22,
+    minWidth: 24,
+    height: 24,
     paddingHorizontal: 6,
-    borderRadius: 11,
+    borderRadius: 12,
     backgroundColor: colors.muted,
     alignItems: 'center',
     justifyContent: 'center',
@@ -476,12 +489,12 @@ const styles = StyleSheet.create({
   dateBlock: { flexGrow: 1, flexShrink: 1, minWidth: 150 },
   dateText: {
     ...text.title,
-    fontSize: 19,
+    fontSize: 18,
     lineHeight: 24,
     color: colors.foreground,
   },
-  timeRow: { flexDirection: 'row', alignItems: 'center', gap: 5, marginTop: 3 },
-  timeText: { ...text.caption, color: colors.mutedFg },
+  timeRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 4 },
+  timeText: { ...text.small, color: colors.mutedFg },
 
   cardBody: { marginTop: space.md, gap: 2 },
   petName: { ...text.bodyBold, color: colors.foreground },
@@ -507,27 +520,39 @@ const styles = StyleSheet.create({
     columnGap: space.md,
     rowGap: space.xs,
   },
+  /* Neutral icon circle, the same one the Profile tiles use. */
+  billIcon: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: colors.muted,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   billTotal: {
-    ...text.smallBold,
+    ...text.bodyBold,
     color: colors.foreground,
     fontVariant: ['tabular-nums'],
     flexShrink: 1,
   },
-  viewReceiptRow: { flexDirection: 'row', alignItems: 'center', gap: 3 },
-  viewReceiptText: { ...text.caption, fontFamily: fonts.bodyBold, color: colors.primary },
+  viewReceiptRow: { flexDirection: 'row', alignItems: 'center', gap: 2 },
+  viewReceiptText: { ...text.small, fontFamily: fonts.bodyBold, color: colors.primary },
+
+  /* Destructive: red outline, no fill. 48px like every other button,
+     with the border and text in the same red so they match the mockup. */
   cancelBtn: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 6,
+    gap: 8,
     marginTop: space.sm,
-    minHeight: 42,
-    borderRadius: radius.md,
-    borderWidth: 1,
-    borderColor: colors.destructive,
-    backgroundColor: colors.destructiveBg,
+    height: 48,
+    borderRadius: 24,
+    borderWidth: 1.5,
+    borderColor: status.danger.fg,
+    backgroundColor: 'transparent',
   },
-  cancelBtnText: { ...text.smallBold, color: status.danger.fg },
+  cancelBtnText: { ...text.bodyBold, color: status.danger.fg },
   callBtn: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -544,8 +569,8 @@ const styles = StyleSheet.create({
   emptyIcon: {
     width: 62,
     height: 62,
-    borderRadius: 22,
-    backgroundColor: colors.secondary,
+    borderRadius: 31,
+    backgroundColor: colors.muted,
     alignItems: 'center',
     justifyContent: 'center',
     marginBottom: space.xl,

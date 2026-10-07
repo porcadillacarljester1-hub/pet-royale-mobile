@@ -112,6 +112,9 @@ export const text = {
    *  headings (e.g. "We care for you and your pets"). Added because
    *  screens referenced text.displayRegular.fontFamily directly. */
   displayRegular: { fontFamily: fonts.displayRegular, fontSize: sz(15), lineHeight: sz(22) },
+  /** The large title at the top of a tab screen ("Profile", "Pet Essentials").
+   *  One style so every tab matches. */
+  screenTitle: { fontFamily: fonts.display, fontSize: sz(24), lineHeight: sz(28), letterSpacing: 0 },
   title:   { fontFamily: fonts.display, fontSize: sz(22), letterSpacing: -0.4, lineHeight: sz(28) },
   heading: { fontFamily: fonts.bodyBold, fontSize: sz(16), lineHeight: sz(21) },
   /** Section headings ("Pet Essentials", "Recent visits", "Paid invoices"). One style so every screen matches. */

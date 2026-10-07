@@ -8,8 +8,7 @@ import {
   Image,
   RefreshControl,
   ScrollView,
-  Animated,
-  AccessibilityInfo,
+  useWindowDimensions,
 } from 'react-native';
 import { useRouter, useFocusEffect } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -18,14 +17,14 @@ import {
   Bell, CalendarPlus, Check, AlertCircle, Scissors, Activity, Stethoscope,
 } from 'lucide-react-native';
 import {
-  colors, text, space, radius, shadow, common, hitSlop, status,
+  colors, text, space, radius, shadow, common, hitSlop, status, sz,
 } from '../../constants/theme';
 import { useTabBarClearance } from './_layout';
 import { BrandWordmark } from '../../constants/brand';
 import { Skeleton, SkeletonRow } from '../../components/Skeleton';
 import { ReceiptModal } from '../../components/ReceiptModal';
 import { ProductCard, ProductCardSkeleton } from '../../components/ProductCard';
-import { peso, toLocalISO, fmtDate, fmtShortDate, fmtTime } from '../../lib/format';
+import { pesoWhole, toLocalISO, fmtDate, fmtShortDate, fmtTime } from '../../lib/format';
 import { useRealtimeRefresh } from '../../lib/useRealtimeRefresh';
 
 function greeting() {
@@ -53,13 +52,39 @@ const TRACK_INDEX: Record<string, number> = { incoming: 0, confirmed: 1 };
 const ON_NAVY_MUTED = 'rgba(246, 245, 238, 0.72)';
 const ON_NAVY_SOFT = 'rgba(246, 245, 238, 0.85)';
 const ON_NAVY_FAINT = 'rgba(246, 245, 238, 0.65)';
-const ON_NAVY_PANEL = 'rgba(255, 255, 255, 0.09)';
 const ON_NAVY_BTN = 'rgba(255, 255, 255, 0.12)';
 const ON_NAVY_TRACK = 'rgba(255, 255, 255, 0.2)';
 const ON_NAVY_DOT_RING = 'rgba(255, 255, 255, 0.35)';
-const ON_NAVY_RING = 'rgba(255, 255, 255, 0.05)';
 const AMBER = '#F4C46B';
 const SERVICE_TILE = '#E9A23B';
+
+/* Content never gets wider than this, so on a tablet the page is a
+   centred column instead of stretched cards. */
+const MAX_CONTENT = 560;
+
+/* Same profile-photo ring as the Profile screen, at a smaller size. */
+const AVATAR = 36;
+const RING_GAP = 2;
+const RING_WIDTH = 2;
+const AVATAR_OUTER = AVATAR + (RING_GAP + RING_WIDTH) * 2;
+
+/* Widths that depend on the screen. Text and heights already follow the
+   screen through sz() in the theme; the product strip needs the real
+   width so two cards fill the row on any phone (capped on tablets). */
+function useHomeLayout() {
+  const { width } = useWindowDimensions();
+  const content = Math.min(width, MAX_CONTENT);
+  const stripCardWidth = Math.min(
+    220,
+    Math.floor((content - space.xxl * 2 - space.md) / 2),
+  );
+  return { stripCardWidth };
+}
+
+/* The Requested / Confirmed / Visit progress line. The status pill already
+   says the same thing, so it's off for a lighter card; set to true to
+   bring it back. */
+const SHOW_TRACK = false;
 
 /* A small icon per kind of service, falling back to a check. */
 function visitIcon(service: string) {
@@ -70,41 +95,11 @@ function visitIcon(service: string) {
   return Check;
 }
 
-/* The status dot in the pill softly pulses while a visit awaits
-   confirmation; it holds still if the device asks for reduced motion. */
-function PulseDot({ color, pulse }: { color: string; pulse: boolean }) {
-  const [opacity] = useState(() => new Animated.Value(1));
-
-  useEffect(() => {
-    if (!pulse) {
-      opacity.setValue(1);
-      return;
-    }
-    let loop: Animated.CompositeAnimation | null = null;
-    let active = true;
-    AccessibilityInfo.isReduceMotionEnabled().then((reduce) => {
-      if (!active || reduce) return;
-      loop = Animated.loop(
-        Animated.sequence([
-          Animated.timing(opacity, { toValue: 0.25, duration: 900, useNativeDriver: true }),
-          Animated.timing(opacity, { toValue: 1, duration: 900, useNativeDriver: true }),
-        ]),
-      );
-      loop.start();
-    });
-    return () => {
-      active = false;
-      loop?.stop();
-    };
-  }, [pulse, opacity]);
-
-  return <Animated.View style={[styles.pillDot, { backgroundColor: color, opacity }]} />;
-}
-
 export default function HomeScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const bottomPad = useTabBarClearance();
+  const { stripCardWidth } = useHomeLayout();
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [loadError, setLoadError] = useState(false);
@@ -273,15 +268,17 @@ export default function HomeScreen() {
             accessibilityRole="button"
             accessibilityLabel="Your profile"
           >
-            {avatarUrl ? (
-              <Image source={{ uri: avatarUrl }} style={styles.avatar} />
-            ) : (
-              <View style={styles.avatarFallback}>
-                <Text style={styles.avatarInitial}>
-                  {firstName[0]?.toUpperCase() || '?'}
-                </Text>
-              </View>
-            )}
+            <View style={styles.avatarRing}>
+              {avatarUrl ? (
+                <Image source={{ uri: avatarUrl }} style={styles.avatar} />
+              ) : (
+                <View style={styles.avatarFallback}>
+                  <Text style={styles.avatarInitial}>
+                    {firstName[0]?.toUpperCase() || '?'}
+                  </Text>
+                </View>
+              )}
+            </View>
           </TouchableOpacity>
 
           <View style={styles.greetingWrap}>
@@ -301,7 +298,7 @@ export default function HomeScreen() {
             accessibilityRole="button"
             accessibilityLabel={unreadCount > 0 ? `Notifications, ${unreadCount} unread` : 'Notifications'}
           >
-            <Bell size={18} color={colors.foreground} />
+            <Bell size={20} color={colors.primary} strokeWidth={1.8} />
             {unreadCount > 0 && (
               <View style={styles.notifBadge}>
                 <Text style={styles.notifBadgeText} numberOfLines={1}>
@@ -325,12 +322,9 @@ export default function HomeScreen() {
         {/* ── Next visit ── */}
         {nextVisit && nextTone ? (
           <View style={styles.visitCard} accessibilityLabel="Next visit">
-            <View style={styles.visitRing} pointerEvents="none" />
-
             <View style={styles.visitTop}>
               <Text style={styles.visitEyebrow} maxFontSizeMultiplier={1.15}>Next visit</Text>
-              <View style={[common.pill, styles.statusPill, { backgroundColor: nextTone.bg }]}>
-                <PulseDot color={nextTone.fg} pulse={nextVisit.status === 'incoming'} />
+              <View style={[common.pill, { backgroundColor: nextTone.bg }]}>
                 <Text
                   style={[common.pillText, { color: nextTone.fg }]}
                   maxFontSizeMultiplier={1.15}
@@ -369,35 +363,30 @@ export default function HomeScreen() {
               </View>
             </View>
 
-            <View style={styles.track} accessibilityLabel={`Status: ${TRACK_STEPS[trackOn]}`}>
-              <View style={styles.trackLine} />
-              {TRACK_STEPS.map((label, i) => {
-                const on = i === trackOn;
-                const align = i === 0 ? 'flex-start' : i === TRACK_STEPS.length - 1 ? 'flex-end' : 'center';
-                return (
-                  <View key={label} style={[styles.trackStep, { alignItems: align }]}>
-                    <View style={[styles.trackDot, on && styles.trackDotOn]} />
-                    <Text
-                      style={[styles.trackLabel, on && styles.trackLabelOn]}
-                      maxFontSizeMultiplier={1.15}
-                    >
-                      {label}
-                    </Text>
-                  </View>
-                );
-              })}
-            </View>
+            {SHOW_TRACK && (
+              <View style={styles.track} accessibilityLabel={`Status: ${TRACK_STEPS[trackOn]}`}>
+                <View style={styles.trackLine} />
+                {TRACK_STEPS.map((label, i) => {
+                  const on = i === trackOn;
+                  const align = i === 0 ? 'flex-start' : i === TRACK_STEPS.length - 1 ? 'flex-end' : 'center';
+                  return (
+                    <View key={label} style={[styles.trackStep, { alignItems: align }]}>
+                      <View style={[styles.trackDot, on && styles.trackDotOn]} />
+                      <Text
+                        style={[styles.trackLabel, on && styles.trackLabelOn]}
+                        maxFontSizeMultiplier={1.15}
+                      >
+                        {label}
+                      </Text>
+                    </View>
+                  );
+                })}
+              </View>
+            )}
 
+            {/* One action. The old Cancel button opened the same Visits
+                screen as this one, so it didn't cancel anything. */}
             <View style={styles.visitBtns}>
-              <TouchableOpacity
-                style={styles.visitBtn}
-                onPress={goVisits}
-                activeOpacity={0.8}
-                accessibilityRole="button"
-                accessibilityLabel="Cancel visit"
-              >
-                <Text style={styles.visitBtnText} maxFontSizeMultiplier={1.15}>Cancel</Text>
-              </TouchableOpacity>
               <TouchableOpacity
                 style={[styles.visitBtn, styles.visitBtnMain]}
                 onPress={goVisits}
@@ -446,13 +435,15 @@ export default function HomeScreen() {
             <ScrollView
               horizontal
               showsHorizontalScrollIndicator={false}
+              style={styles.productScroll}
               contentContainerStyle={styles.productStrip}
             >
               {products.map((product) => (
                 <ProductCard
                   key={product.id}
                   product={product}
-                  style={styles.stripCard}
+                  style={{ width: stripCardWidth }}
+                  compact
                   hideHealthyStock
                   onPress={() => router.push('/(tabs)/products' as any)}
                 />
@@ -494,7 +485,7 @@ export default function HomeScreen() {
                     }
                   >
                     <View style={styles.visitRowIcon}>
-                      <Icon size={17} color={status.success.fg} strokeWidth={2} />
+                      <Icon size={20} color={colors.primary} strokeWidth={1.9} />
                     </View>
                     <View style={styles.visitRowCopy}>
                       <Text
@@ -514,7 +505,7 @@ export default function HomeScreen() {
                     </View>
                     {invoice && (
                       <Text style={styles.visitRowAmount} maxFontSizeMultiplier={1.15}>
-                        {peso(invoice.total)}
+                        {pesoWhole(invoice.total)}
                       </Text>
                     )}
                   </TouchableOpacity>
@@ -538,7 +529,14 @@ export default function HomeScreen() {
 
 const styles = StyleSheet.create({
   container: { ...common.screen },
-  scroll: { paddingHorizontal: space.xl },
+  /* Same side margin as Profile (space.xxl). maxWidth + alignSelf keep
+     the content a centred column on tablets. */
+  scroll: {
+    paddingHorizontal: space.xxl,
+    width: '100%',
+    maxWidth: MAX_CONTENT,
+    alignSelf: 'center',
+  },
 
   /* Header scrolls with the page: photo · greeting · bell */
   header: {
@@ -547,11 +545,19 @@ const styles = StyleSheet.create({
     gap: space.md,
     paddingBottom: 0,
   },
-  avatar: { width: 40, height: 40, borderRadius: 20, backgroundColor: colors.muted },
+  avatarRing: {
+    width: AVATAR_OUTER,
+    height: AVATAR_OUTER,
+    borderRadius: AVATAR_OUTER / 2,
+    borderWidth: RING_WIDTH,
+    borderColor: colors.accent,
+    padding: RING_GAP,
+  },
+  avatar: { width: AVATAR, height: AVATAR, borderRadius: AVATAR / 2, backgroundColor: colors.muted },
   avatarFallback: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
+    width: AVATAR,
+    height: AVATAR,
+    borderRadius: AVATAR / 2,
     backgroundColor: colors.secondary,
     alignItems: 'center',
     justifyContent: 'center',
@@ -564,24 +570,16 @@ const styles = StyleSheet.create({
     color: colors.secondaryFg,
   },
   greetingWrap: { flex: 1, minWidth: 0 },
-  greetingSmall: { ...text.small, fontSize: 12, lineHeight: 16, color: colors.mutedFg },
-  greetingName: {
-    ...text.title,
-    fontSize: 20,
-    lineHeight: 24,
-    letterSpacing: -0.3,
-    color: colors.foreground,
-  },
+  greetingSmall: { ...text.caption, color: colors.mutedFg },
+  greetingName: { ...text.title, fontSize: sz(20), lineHeight: sz(24), color: colors.foreground },
   iconBtn: {
     position: 'relative',
-    width: 40,
-    height: 40,
-    borderRadius: 20,
+    width: AVATAR_OUTER,
+    height: AVATAR_OUTER,
+    borderRadius: AVATAR_OUTER / 2,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: colors.card,
-    borderWidth: 1,
-    borderColor: colors.cardBorder,
+    backgroundColor: colors.muted,
   },
   notifBadge: {
     position: 'absolute',
@@ -621,20 +619,10 @@ const styles = StyleSheet.create({
   visitCard: {
     marginTop: space.md,
     backgroundColor: colors.primary,
-    borderRadius: 22,
-    padding: 16,
+    borderRadius: radius.card,
+    padding: space.lg,
     overflow: 'hidden',
     ...shadow.primary,
-  },
-  visitRing: {
-    position: 'absolute',
-    right: -24,
-    bottom: -32,
-    width: 120,
-    height: 120,
-    borderRadius: 60,
-    borderWidth: 18,
-    borderColor: ON_NAVY_RING,
   },
   visitTop: {
     flexDirection: 'row',
@@ -643,38 +631,28 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     gap: space.sm,
   },
-  visitEyebrow: { ...text.small, fontSize: 12, lineHeight: 16, color: ON_NAVY_MUTED },
-  statusPill: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  pillDot: { width: 7, height: 7, borderRadius: 3.5 },
+  visitEyebrow: { ...text.caption, color: ON_NAVY_MUTED },
   visitTimeRow: {
     flexDirection: 'row',
     flexWrap: 'wrap',
     alignItems: 'baseline',
     columnGap: 8,
-    marginTop: 10,
-    marginBottom: 10,
+    marginTop: 6,
+    marginBottom: 0,
   },
-  visitTime: {
-    ...text.display,
-    fontSize: 30,
-    lineHeight: 34,
-    letterSpacing: -0.6,
-    color: colors.primaryFg,
-  },
-  visitDay: { ...text.body, fontSize: 13, lineHeight: 18, color: ON_NAVY_SOFT },
+  visitTime: { ...text.display, color: colors.primaryFg },
+  visitDay: { ...text.small, color: ON_NAVY_SOFT },
 
   svcPanel: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 10,
-    padding: 10,
-    borderRadius: 14,
-    backgroundColor: ON_NAVY_PANEL,
+    gap: space.md,
+    marginTop: space.md,
   },
   svcTile: {
     width: 40,
     height: 40,
-    borderRadius: 12,
+    borderRadius: 20,
     backgroundColor: SERVICE_TILE,
     alignItems: 'center',
     justifyContent: 'center',
@@ -689,8 +667,8 @@ const styles = StyleSheet.create({
     color: '#fff',
   },
   svcCopy: { flex: 1, minWidth: 0 },
-  visitService: { ...text.bodyBold, fontSize: 14, lineHeight: 18, color: colors.primaryFg },
-  visitPet: { ...text.small, fontSize: 12, lineHeight: 16, color: ON_NAVY_SOFT },
+  visitService: { ...text.bodyBold, color: colors.primaryFg },
+  visitPet: { ...text.small, color: ON_NAVY_SOFT },
 
   track: { flexDirection: 'row', marginTop: 12, marginBottom: 2, marginHorizontal: 2 },
   trackLine: {
@@ -711,20 +689,21 @@ const styles = StyleSheet.create({
     borderColor: ON_NAVY_DOT_RING,
   },
   trackDotOn: { backgroundColor: AMBER, borderColor: AMBER },
-  trackLabel: { ...text.caption, fontSize: 10.5, lineHeight: 14, color: ON_NAVY_FAINT },
-  trackLabelOn: { ...text.smallBold, fontSize: 10.5, lineHeight: 14, color: '#fff' },
+  trackLabel: { ...text.caption, fontSize: sz(10.5), lineHeight: sz(14), color: ON_NAVY_FAINT },
+  trackLabelOn: { ...text.smallBold, fontSize: sz(10.5), lineHeight: sz(14), color: '#fff' },
 
-  visitBtns: { flexDirection: 'row', gap: 8, marginTop: 12 },
+  visitBtns: { flexDirection: 'row', gap: 8, marginTop: space.lg },
   visitBtn: {
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
+    minHeight: 44,
     paddingVertical: 9,
     borderRadius: 12,
     backgroundColor: ON_NAVY_BTN,
   },
   visitBtnMain: { backgroundColor: colors.primaryFg },
-  visitBtnText: { ...text.bodyBold, fontSize: 13, lineHeight: 18, color: colors.primaryFg },
+  visitBtnText: { ...text.smallBold, color: colors.primaryFg },
   visitBtnMainText: { color: colors.primary },
 
   bookCard: {
@@ -748,15 +727,16 @@ const styles = StyleSheet.create({
   },
   bookBtnText: { ...text.bodyBold, color: colors.primary },
 
+  /* Same heading style and spacing as Profile's sections. */
   sectionHead: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    marginTop: 20,
-    marginBottom: 10,
+    marginTop: space.xxl,
+    marginBottom: space.md,
   },
-  sectionTitle: { ...text.section, fontSize: 18, lineHeight: 24, color: colors.foreground },
-  sectionLink: { ...text.smallBold, fontSize: 13, lineHeight: 18, color: colors.primary },
+  sectionTitle: { ...text.section, color: colors.foreground },
+  sectionLink: { ...text.smallBold, color: colors.primary },
 
   /* ── Recent visits ── */
   visitList: {
@@ -774,28 +754,29 @@ const styles = StyleSheet.create({
     borderBottomColor: colors.border,
   },
   visitRowLast: { borderBottomWidth: 0 },
+  /* The same round tile Profile uses behind its icons. */
   visitRowIcon: {
-    width: 36,
-    height: 36,
-    borderRadius: 12,
-    backgroundColor: status.success.bg,
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: colors.muted,
     alignItems: 'center',
     justifyContent: 'center',
   },
   visitRowCopy: { flex: 1, minWidth: 0 },
-  visitRowService: { ...text.bodyBold, fontSize: 14, lineHeight: 18, color: colors.foreground },
-  visitRowMeta: { ...text.caption, fontSize: 11.5, lineHeight: 15, color: colors.mutedFg, marginTop: 1 },
+  visitRowService: { ...text.bodyBold, color: colors.foreground },
+  visitRowMeta: { ...text.caption, color: colors.mutedFg, marginTop: 2 },
   visitRowAmount: {
     ...text.bodyBold,
-    fontSize: 14,
-    lineHeight: 18,
     color: colors.foreground,
     fontVariant: ['tabular-nums'],
     flexShrink: 0,
   },
 
-  productStrip: { gap: space.sm, paddingRight: space.xl, paddingBottom: space.sm },
-  stripCard: { width: 122 },
+  /* The strip bleeds to the edge of the content column, like Profile's
+     pet row, so the next card peeks in and shows that it scrolls. */
+  productScroll: { marginHorizontal: -space.xxl },
+  productStrip: { gap: space.md, paddingHorizontal: space.xxl, paddingBottom: space.sm },
 });
 
 /* ── Loading state ──
@@ -803,6 +784,7 @@ const styles = StyleSheet.create({
    the loaded page: header, hero card, product strip and visits list. */
 function HomeSkeleton({ topInset }: { topInset: number }) {
   const bottomPad = useTabBarClearance();
+  const { stripCardWidth } = useHomeLayout();
   return (
     <View
       style={styles.container}
@@ -817,17 +799,17 @@ function HomeSkeleton({ topInset }: { topInset: number }) {
         showsVerticalScrollIndicator={false}
       >
         <View style={[styles.header, { paddingTop: topInset + space.md }]}>
-          <Skeleton width={40} height={40} radius={20} />
+          <Skeleton width={AVATAR_OUTER} height={AVATAR_OUTER} radius={AVATAR_OUTER / 2} />
           <View style={styles.greetingWrap}>
             <Skeleton width={90} height={12} />
             <View style={{ height: 6 }} />
             <Skeleton width={110} height={20} />
           </View>
-          <Skeleton width={40} height={40} radius={20} />
+          <Skeleton width={AVATAR_OUTER} height={AVATAR_OUTER} radius={AVATAR_OUTER / 2} />
         </View>
 
         <View style={{ marginTop: space.md }}>
-          <Skeleton width="100%" height={210} radius={22} />
+          <Skeleton width="100%" height={218} radius={radius.card} />
         </View>
 
         <View style={styles.sectionHead}>
@@ -836,7 +818,7 @@ function HomeSkeleton({ topInset }: { topInset: number }) {
         </View>
         <View style={{ flexDirection: 'row', gap: space.md, overflow: 'hidden' }}>
           {[0, 1, 2].map((i) => (
-            <ProductCardSkeleton key={i} style={styles.stripCard} />
+            <ProductCardSkeleton key={i} compact style={{ width: stripCardWidth }} />
           ))}
         </View>
 
@@ -848,7 +830,7 @@ function HomeSkeleton({ topInset }: { topInset: number }) {
           {[0, 1, 2].map((i) => (
             <SkeletonRow
               key={i}
-              tile={36}
+              tile={40}
               style={[styles.visitRow, i === 2 && styles.visitRowLast]}
             />
           ))}

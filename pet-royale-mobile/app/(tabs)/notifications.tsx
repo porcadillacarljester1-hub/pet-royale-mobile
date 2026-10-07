@@ -1,24 +1,22 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
-  ActivityIndicator, RefreshControl, Alert,
-  Modal, Linking,
+  RefreshControl, Modal,
 } from 'react-native';
+import { Swipeable, GestureHandlerRootView } from 'react-native-gesture-handler';
 import { Ionicons } from '@expo/vector-icons';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { supabase } from '@/lib/supabase';
 import { useFocusEffect, useRouter } from 'expo-router';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { colors, text, space, radius, shadow, fonts, hitSlop } from '@/constants/theme';
+import { colors, text, space, radius, fonts, hitSlop } from '@/constants/theme';
 import { Skeleton } from '@/components/Skeleton';
 import { ScreenHeader } from '@/components/ScreenHeader';
 import { PillTabs } from '@/components/PillTabs';
 import { TAB_BAR_CLEARANCE } from './_layout';
 import {
   type AppNotification,
-  getActionsForCategory,
   markNotificationRead,
   deleteNotification,
-  cancelAppointment,
   fetchAppointmentById,
 } from '@/lib/notificationActions';
 
@@ -26,7 +24,13 @@ const BORDER = colors.border;
 const SUB = colors.mutedFg;
 const INK = colors.foreground;
 const BG = colors.background;
-const CLINIC_ADDRESS = 'Calbayog City, Eastern Samar, Philippines';
+const RED = '#ef4444';
+const UNDO_MS = 4000;
+
+/* Appointments with these statuses live in Visits > History.
+   Everything else lives in Visits > Upcoming.
+   Adjust to match your appointments.status values. */
+const HISTORY_STATUSES = ['completed', 'cancelled', 'canceled', 'no_show', 'declined'];
 
 type TabKey = 'all' | 'unread';
 
@@ -38,17 +42,15 @@ function parseDate(value: string): Date {
   return new Date(hasZone ? value : value.replace(' ', 'T') + 'Z');
 }
 
-function timeAgo(value: string): string {
+/* Short social-style time: now, 5m, 11h, 3d, Oct 7 */
+function shortTime(value: string): string {
   const mins = Math.round((Date.now() - parseDate(value).getTime()) / 60000);
-  if (mins < 1) return 'less than a minute ago';
-  if (mins < 45) return `${mins} minute${mins === 1 ? '' : 's'} ago`;
-  if (mins < 90) return 'about 1 hour ago';
-  const hours = Math.round(mins / 60);
-  if (mins < 1440) return `about ${hours} hours ago`;
-  if (mins < 2520) return '1 day ago';
+  if (mins < 1) return 'now';
+  if (mins < 60) return `${mins}m`;
+  if (mins < 1440) return `${Math.round(mins / 60)}h`;
   const days = Math.round(mins / 1440);
-  if (days < 30) return `${days} days ago`;
-  return parseDate(value).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+  if (days < 7) return `${days}d`;
+  return parseDate(value).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 }
 
 function getDateGroupLabel(value: string): string {
@@ -70,15 +72,25 @@ export default function NotificationsScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
 
+  const [menuItem, setMenuItem] = useState<AppNotification | null>(null);
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [tab, setTab] = useState<TabKey>('all');
+  const [openingId, setOpeningId] = useState<string | null>(null);
+  const [showUndo, setShowUndo] = useState(false);
 
-  const [selected, setSelected] = useState<AppNotification | null>(null);
-  const [detailData, setDetailData] = useState<any>(null);
-  const [loadingDetail, setLoadingDetail] = useState(false);
-  const [actionLoading, setActionLoading] = useState<string | null>(null);
+  /* A deleted row is hidden at once but only removed from the database
+     after UNDO_MS, so Undo can bring it back. */
+  const pending = useRef<{ item: AppNotification; timer: ReturnType<typeof setTimeout> } | null>(null);
+
+  // Finishes a waiting delete right away (used by a second delete and on leaving).
+  const commitPending = () => {
+    if (!pending.current) return;
+    clearTimeout(pending.current.timer);
+    deleteNotification(pending.current.item.id);
+    pending.current = null;
+  };
 
   const fetchNotifications = async () => {
     const { data: { user } } = await supabase.auth.getUser();
@@ -92,7 +104,10 @@ export default function NotificationsScreen() {
       .order('created_at', { ascending: false })
       .limit(50);
 
-    if (data) setNotifications(data);
+    if (data) {
+      const hiddenId = pending.current?.item.id;
+      setNotifications(hiddenId ? data.filter((n: AppNotification) => n.id !== hiddenId) : data);
+    }
     setIsLoading(false);
     setRefreshing(false);
   };
@@ -121,6 +136,9 @@ export default function NotificationsScreen() {
     };
   }, []);
 
+  // Leaving the screen finishes any delete that is still waiting.
+  useEffect(() => () => commitPending(), []);
+
   const handleBack = () => {
     if (router.canGoBack()) router.back();
     else router.replace('/(tabs)/home' as any);
@@ -143,97 +161,58 @@ export default function NotificationsScreen() {
     setNotifications(prev => prev.map(n => ({ ...n, is_read: true })));
   };
 
-  const handleDelete = (id: string) => {
-    Alert.alert('Delete notification', 'Remove this notification?', [
-      { text: 'Cancel', style: 'cancel' },
-      {
-        text: 'Delete', style: 'destructive',
-        onPress: async () => {
-          await deleteNotification(id);
-          setNotifications(prev => prev.filter(n => n.id !== id));
-        },
-      },
-    ]);
+  // ── Delete with undo ──
+  const handleDelete = (item: AppNotification) => {
+    commitPending(); // a second delete finishes the first
+    setNotifications(prev => prev.filter(n => n.id !== item.id));
+    const timer = setTimeout(() => {
+      deleteNotification(item.id);
+      pending.current = null;
+      setShowUndo(false);
+    }, UNDO_MS);
+    pending.current = { item, timer };
+    setShowUndo(true);
   };
 
-  // ── Detail sheet ──
-  const openDetail = async (n: AppNotification) => {
-    setSelected(n);
-    setDetailData(null);
-    if (!n.is_read) handleMarkAsRead(n.id);
-    if (n.related_type !== 'appointment' || !n.related_id) return;
+  const handleUndo = () => {
+    if (!pending.current) return;
+    const { item, timer } = pending.current;
+    clearTimeout(timer);
+    pending.current = null;
+    setNotifications(prev =>
+      [...prev, item].sort((a, b) => parseDate(b.created_at).getTime() - parseDate(a.created_at).getTime()),
+    );
+    setShowUndo(false);
+  };
 
-    setLoadingDetail(true);
-    try {
-      setDetailData(await fetchAppointmentById(n.related_id));
-    } catch {
-      setDetailData(null);
-    } finally {
-      setLoadingDetail(false);
+  const handleMore = (item: AppNotification) => setMenuItem(item);
+
+  // ── Open the appointment where it lives (History or Upcoming) ──
+  const openAppointment = async (item: AppNotification) => {
+    if (openingId) return;
+    if (!item.is_read) handleMarkAsRead(item.id);
+
+    if (item.related_type !== 'appointment' || !item.related_id) {
+      router.push('/(tabs)/appointments' as any);
+      return;
     }
-  };
 
-  const closeDetail = () => {
-    setSelected(null);
-    setDetailData(null);
-  };
-
-  const handleAction = async (actionKey: string) => {
-    if (!selected) return;
-    setActionLoading(actionKey);
+    setOpeningId(item.id);
+    let visitsTab: 'upcoming' | 'history' = 'upcoming';
     try {
-      switch (actionKey) {
-        case 'view_appointment':
-          closeDetail();
-          router.push('/(tabs)/appointments' as any);
-          break;
-
-        case 'cancel':
-          if (selected.related_id) {
-            Alert.alert('Cancel visit', 'Are you sure you want to cancel this visit?', [
-              { text: 'Keep it', style: 'cancel' },
-              {
-                text: 'Cancel visit', style: 'destructive',
-                onPress: async () => {
-                  try {
-                    await cancelAppointment(selected.related_id!);
-                    closeDetail();
-                    Alert.alert('Cancelled', 'Your visit has been cancelled.');
-                  } catch {
-                    Alert.alert('Could not cancel', 'This visit can no longer be cancelled.');
-                  }
-                },
-              },
-            ]);
-          }
-          break;
-
-        case 'reschedule':
-          if (selected.related_id) {
-            closeDetail();
-            router.push({
-              pathname: '/(tabs)/appointments',
-              params: { reschedule: '1', appointmentId: selected.related_id },
-            } as any);
-          }
-          break;
-
-        case 'directions':
-          Linking.openURL(
-            `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(CLINIC_ADDRESS)}`,
-          );
-          break;
-
-        case 'book_appointment':
-          closeDetail();
-          router.push({ pathname: '/(tabs)/appointments', params: { openBooking: '1' } } as any);
-          break;
+      const appt = await fetchAppointmentById(item.related_id);
+      if (appt && HISTORY_STATUSES.includes(String(appt.status ?? '').toLowerCase())) {
+        visitsTab = 'history';
       }
     } catch {
-      Alert.alert('Something went wrong', 'Please try again.');
-    } finally {
-      setActionLoading(null);
+      /* fall back to Upcoming */
     }
+    setOpeningId(null);
+
+    router.push({
+      pathname: '/(tabs)/appointments',
+      params: { appointmentId: item.related_id, tab: visitsTab },
+    } as any);
   };
 
   const unreadCount = notifications.filter(n => !n.is_read).length;
@@ -244,13 +223,9 @@ export default function NotificationsScreen() {
     items: visible.filter(n => getDateGroupLabel(n.created_at) === group),
   })).filter(g => g.items.length > 0);
 
-  const actions = selected ? getActionsForCategory(selected.category) : [];
-
   return (
-    <View style={styles.container}>
-      {/* ── Header ── The bell opens this, so it's called Notifications.
-          "Visits" is the name of the bookings tab. */}
-      <ScreenHeader title="Notifications" onBack={handleBack} bordered={false} />
+    <GestureHandlerRootView style={styles.container}>
+      <ScreenHeader title="Notifications" onBack={handleBack} large />
 
       <View style={styles.tabRow}>
         <PillTabs
@@ -261,20 +236,8 @@ export default function NotificationsScreen() {
           value={tab}
           onChange={setTab}
         />
-        {unreadCount > 0 && (
-          <TouchableOpacity
-            onPress={handleMarkAllRead}
-            activeOpacity={0.7}
-            hitSlop={hitSlop}
-            style={styles.markAllRow}
-            accessibilityRole="button"
-          >
-            <Text style={styles.markAllText}>Mark all read</Text>
-          </TouchableOpacity>
-        )}
       </View>
 
-      {/* ── List ── */}
       {isLoading ? (
         <NotificationsSkeleton />
       ) : (
@@ -304,149 +267,153 @@ export default function NotificationsScreen() {
               </Text>
             </View>
           ) : (
-            grouped.map(({ group, items }) => (
+            grouped.map(({ group, items }, groupIndex) => (
               <View key={group} style={styles.dateSection}>
                 <View style={styles.dateHeader}>
                   <Text style={styles.dateTitle}>{group}</Text>
                   <View style={styles.countPill}>
                     <Text style={styles.countText}>{items.length}</Text>
                   </View>
+                  {groupIndex === 0 && unreadCount > 0 && (
+                    <TouchableOpacity
+                      onPress={handleMarkAllRead}
+                      activeOpacity={0.7}
+                      hitSlop={hitSlop}
+                      style={styles.markAllRow}
+                      accessibilityRole="button"
+                    >
+                      <Text style={styles.markAllText}>Mark all read</Text>
+                    </TouchableOpacity>
+                  )}
                 </View>
 
-                {/* Tapping a card opens its details, with the "view
-                    appointment" action inside, so cards don't need a
-                    button of their own. Unread cards are lifted (white,
-                    shadow, bold); read ones sit flat and quiet. */}
-                {items.map(item => {
-                  const isUnread = !item.is_read;
-                  return (
-                    <TouchableOpacity
-                      key={item.id}
-                      style={[styles.card, isUnread && styles.cardUnread]}
-                      onPress={() => openDetail(item)}
-                      onLongPress={() => handleDelete(item.id)}
-                      activeOpacity={0.8}
-                      accessibilityRole="button"
-                      accessibilityLabel={`${isUnread ? 'Unread. ' : ''}${item.title}. ${item.message}`}
-                    >
-                      <View style={styles.cardTop}>
-                        <View style={styles.cardTitleRow}>
-                          {isUnread && <View style={styles.unreadDot} />}
-                          <Text
-                            style={[styles.cardTitle, isUnread && styles.cardTitleUnread]}
-                            numberOfLines={2}
-                          >
-                            {item.title}
-                          </Text>
-                        </View>
-                        <Text style={styles.cardTime}>{timeAgo(item.created_at)}</Text>
-                      </View>
-
-                      <Text style={[styles.cardMessage, isUnread && styles.cardMessageUnread]}>
-                        {item.message}
-                      </Text>
-                    </TouchableOpacity>
-                  );
-                })}
+                {items.map(item => (
+                  <NotificationRow
+                    key={item.id}
+                    item={item}
+                    onOpen={openAppointment}
+                    onDelete={handleDelete}
+                    onMore={handleMore}
+                  />
+                ))}
               </View>
             ))
           )}
         </ScrollView>
       )}
 
-      {/* ── Detail sheet ── */}
-      <Modal visible={!!selected} transparent animationType="slide" onRequestClose={closeDetail}>
+      {/* ── ⋯ menu ── */}
+      <Modal visible={!!menuItem} transparent animationType="slide" onRequestClose={() => setMenuItem(null)}>
         <View style={styles.sheetOverlay}>
-          <TouchableOpacity style={{ flex: 1 }} activeOpacity={1} onPress={closeDetail} />
-          <View style={styles.sheet}>
+          <TouchableOpacity style={{ flex: 1 }} activeOpacity={1} onPress={() => setMenuItem(null)} />
+          <View style={[styles.sheet, { paddingBottom: 8 + insets.bottom }]}>
             <View style={styles.sheetHandle} />
-
-            {selected && (
+            {menuItem && (
               <>
-                <View style={styles.sheetHeader}>
-                  <View style={styles.sheetIconWrap}>
-                    <Ionicons name="calendar-outline" size={22} color={INK} />
-                  </View>
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.sheetTitle}>{selected.title}</Text>
-                    <Text style={styles.sheetSub}>{timeAgo(selected.created_at)}</Text>
-                  </View>
-                  <TouchableOpacity style={styles.sheetCloseBtn} onPress={closeDetail}>
-                    <Ionicons name="close" size={20} color={SUB} />
+                <Text style={styles.sheetTitle} numberOfLines={1}>{menuItem.title}</Text>
+                {!menuItem.is_read && (
+                  <TouchableOpacity
+                    style={styles.sheetRow}
+                    activeOpacity={0.7}
+                    onPress={() => { handleMarkAsRead(menuItem.id); setMenuItem(null); }}
+                  >
+                    <Ionicons name="checkmark-done-outline" size={20} color={INK} />
+                    <Text style={styles.sheetRowText}>Mark as read</Text>
                   </TouchableOpacity>
-                </View>
-
-                {loadingDetail ? (
-                  <ActivityIndicator color={INK} style={{ marginVertical: 20 }} />
-                ) : (
-                  <View style={styles.detailBody}>
-                    <Text style={styles.detailMessage}>{selected.message}</Text>
-                    {detailData && (
-                      <View style={styles.detailInfoCard}>
-                        <View style={styles.detailInfoRow}>
-                          <Ionicons name="calendar-outline" size={15} color={SUB} />
-                          <Text style={styles.detailInfoText}>{detailData.requested_date}</Text>
-                        </View>
-                        {detailData.scheduled_time ? (
-                          <View style={styles.detailInfoRow}>
-                            <Ionicons name="time-outline" size={15} color={SUB} />
-                            <Text style={styles.detailInfoText}>{detailData.scheduled_time}</Text>
-                          </View>
-                        ) : null}
-                        <View style={styles.detailInfoRow}>
-                          <Ionicons name="paw-outline" size={15} color={SUB} />
-                          <Text style={styles.detailInfoText}>{detailData.service}</Text>
-                        </View>
-                      </View>
-                    )}
-                  </View>
                 )}
-
-                {actions.length > 0 && (
-                  <View style={styles.actionsSection}>
-                    <Text style={styles.actionsSectionTitle}>Actions</Text>
-                    <View style={styles.actionsCard}>
-                      {actions.map((a, i) => (
-                        <View key={a.key}>
-                          <TouchableOpacity
-                            style={styles.actionRow}
-                            onPress={() => handleAction(a.key)}
-                            disabled={!!actionLoading}
-                            activeOpacity={0.7}
-                          >
-                            <View style={[styles.actionIconWrap, { backgroundColor: a.bg }]}>
-                              {actionLoading === a.key ? (
-                                <ActivityIndicator size="small" color={a.color} />
-                              ) : (
-                                <Ionicons name={a.icon as any} size={16} color={a.color} />
-                              )}
-                            </View>
-                            <View style={{ flex: 1 }}>
-                              <Text style={styles.actionLabel}>{a.label}</Text>
-                              <Text style={styles.actionSublabel}>{a.sublabel}</Text>
-                            </View>
-                            <Ionicons name="chevron-forward" size={16} color={SUB} />
-                          </TouchableOpacity>
-                          {i < actions.length - 1 && <View style={styles.actionDivider} />}
-                        </View>
-                      ))}
-                    </View>
-                  </View>
-                )}
-
-                <View style={{ height: 12 + insets.bottom }} />
+                <TouchableOpacity
+                  style={styles.sheetRow}
+                  activeOpacity={0.7}
+                  onPress={() => { const n = menuItem; setMenuItem(null); handleDelete(n); }}
+                >
+                  <Ionicons name="trash-outline" size={20} color={RED} />
+                  <Text style={[styles.sheetRowText, { color: RED }]}>Delete notification</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={styles.sheetCancel} activeOpacity={0.7} onPress={() => setMenuItem(null)}>
+                  <Text style={styles.sheetCancelText}>Cancel</Text>
+                </TouchableOpacity>
               </>
             )}
           </View>
         </View>
       </Modal>
-    </View>
+
+      {showUndo && (
+        <View style={styles.toast} accessibilityLiveRegion="polite">
+          <Text style={styles.toastText}>Notification deleted</Text>
+          <TouchableOpacity onPress={handleUndo} hitSlop={hitSlop} accessibilityRole="button">
+            <Text style={styles.toastUndo}>Undo</Text>
+          </TouchableOpacity>
+        </View>
+      )}
+    </GestureHandlerRootView>
   );
 }
 
-/* Loading state: mirrors the real list (a date header, then cards with a
-   title and time and a two-line message), using the same styles so
-   nothing jumps when the content arrives. */
+/* One compact row: a bold title with an unread dot, the message
+   with a short time at its end, a dot when unread, and a ⋯ menu.
+   Swipe left to reveal Delete. */
+function NotificationRow({
+  item, onOpen, onDelete, onMore,
+}: {
+  item: AppNotification;
+  onOpen: (n: AppNotification) => void;
+  onDelete: (n: AppNotification) => void;
+  onMore: (n: AppNotification) => void;
+}) {
+  const swipeRef = useRef<Swipeable>(null);
+  const isUnread = !item.is_read;
+
+  return (
+    <Swipeable
+      ref={swipeRef}
+      overshootRight={false}
+      renderRightActions={() => (
+        <TouchableOpacity
+          style={styles.swipeDelete}
+          onPress={() => { swipeRef.current?.close(); onDelete(item); }}
+          accessibilityRole="button"
+          accessibilityLabel="Delete notification"
+        >
+          <Ionicons name="trash-outline" size={20} color="#fff" />
+          <Text style={styles.swipeDeleteText}>Delete</Text>
+        </TouchableOpacity>
+      )}
+    >
+      <TouchableOpacity
+        style={[styles.row, isUnread && styles.rowUnread]}
+        onPress={() => onOpen(item)}
+        activeOpacity={0.8}
+        accessibilityRole="button"
+        accessibilityLabel={`${isUnread ? 'Unread. ' : ''}${item.title}. ${item.message}`}
+        accessibilityActions={[{ name: 'delete', label: 'Delete notification' }]}
+        onAccessibilityAction={e => { if (e.nativeEvent.actionName === 'delete') onDelete(item); }}
+      >
+        <View style={styles.rowBody}>
+          <View style={styles.titleRow}>
+            {isUnread && <View style={styles.unreadDot} />}
+            <Text style={styles.rowTitle} numberOfLines={1}>{item.title}</Text>
+          </View>
+          <Text style={styles.rowMessage} numberOfLines={3}>
+            {item.message} <Text style={styles.rowTime}>{shortTime(item.created_at)}</Text>
+          </Text>
+        </View>
+
+        <TouchableOpacity
+          onPress={() => onMore(item)}
+          hitSlop={hitSlop}
+          style={styles.moreBtn}
+          accessibilityRole="button"
+          accessibilityLabel="More options"
+        >
+          <Ionicons name="ellipsis-horizontal" size={18} color={SUB} />
+        </TouchableOpacity>
+      </TouchableOpacity>
+    </Swipeable>
+  );
+}
+
+/* Loading state: mirrors the real rows so nothing jumps on arrival. */
 function NotificationsSkeleton() {
   return (
     <View
@@ -462,13 +429,11 @@ function NotificationsSkeleton() {
           </View>
 
           {Array.from({ length: count }).map((_, i) => (
-            <View key={i} style={styles.card}>
-              <View style={styles.cardTop}>
-                <Skeleton width="50%" height={15} />
-                <Skeleton width={84} height={12} />
+            <View key={i} style={styles.row}>
+              <View style={[styles.rowBody, { gap: 6 }]}>
+                <Skeleton width="45%" height={14} />
+                <Skeleton width="90%" height={13} />
               </View>
-              <Skeleton width="100%" height={13} />
-              <Skeleton width="75%" height={13} />
             </View>
           ))}
         </View>
@@ -480,7 +445,6 @@ function NotificationsSkeleton() {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: BG },
 
-  /* tabs (sit directly under the shared header) */
   tabRow: {
     paddingHorizontal: space.xl,
     paddingTop: space.sm,
@@ -490,59 +454,78 @@ const styles = StyleSheet.create({
     backgroundColor: BG,
   },
   markAllText: { ...text.smallBold, color: INK },
-  markAllRow: { alignSelf: 'flex-end', marginTop: space.sm },
+  markAllRow: { marginLeft: 'auto' },
 
   countPill: {
     minWidth: 22, height: 22, paddingHorizontal: 6, borderRadius: 11,
     backgroundColor: colors.muted, alignItems: 'center', justifyContent: 'center',
   },
-  countPillActive: { backgroundColor: colors.card, borderWidth: 1, borderColor: INK },
   countText: { ...text.caption, fontSize: 12, color: INK },
 
-  /* list — clears the floating tab bar */
-  scrollContent: { paddingHorizontal: space.xl, paddingTop: space.lg, paddingBottom: TAB_BAR_CLEARANCE },
-  dateSection: { marginBottom: space.lg },
-  dateHeader: { flexDirection: 'row', alignItems: 'center', gap: space.sm, marginBottom: space.md },
+  /* list: rows run edge to edge; section headers carry the side padding */
+  scrollContent: { paddingTop: space.sm, paddingBottom: TAB_BAR_CLEARANCE },
+  dateSection: { marginBottom: space.md },
+  dateHeader: {
+    flexDirection: 'row', alignItems: 'center', gap: space.sm,
+    paddingHorizontal: space.xl, paddingTop: space.md, paddingBottom: space.sm,
+  },
   dateTitle: { ...text.bodyBold, fontSize: 14, color: SUB },
 
-  /* Read cards recede: flat, same colour as the page, quieter text.
-     Unread cards stand out: white, lifted, bold title, darker message. */
-  card: {
+  /* row */
+  row: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: space.md,
+    paddingLeft: space.xl,
+    paddingRight: space.md,
+    paddingVertical: space.md,
     backgroundColor: BG,
-    borderRadius: radius.lg,
-    borderWidth: 1,
-    borderColor: BORDER,
-    padding: space.lg,
-    marginBottom: space.md,
-    gap: space.sm,
   },
-  cardUnread: {
-    backgroundColor: colors.white,
-    borderColor: colors.input,
-    ...shadow.card,
-  },
-  cardTop: {
-  flexDirection: 'row',
-  flexWrap: 'wrap',
-  alignItems: 'flex-start',
-  justifyContent: 'space-between',
-  columnGap: space.md,
-  rowGap: 2,
-  },
-  cardTitleRow: {
-  flexDirection: 'row',
-  alignItems: 'center',
-  gap: space.sm,
-  flexGrow: 1,
-  flexShrink: 1,
-  minWidth: 160,
-  },
+  rowUnread: { backgroundColor: colors.white },
+  rowBody: { flex: 1, minWidth: 0 },
+  titleRow: { flexDirection: 'row', alignItems: 'center', gap: space.sm },
+  rowTitle: { fontFamily: fonts.bodyBold, fontSize: 14, lineHeight: 20, color: INK },
+  rowMessage: { ...text.body, fontSize: 14, lineHeight: 19, color: INK },
+  rowTime: { color: SUB },
   unreadDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: colors.primary },
-  cardTitle: { fontFamily: fonts.bodyMedium, fontSize: 15, lineHeight: 22, color: SUB, flexShrink: 1 },
-  cardTitleUnread: { fontFamily: fonts.bodyBold, color: INK },
-  cardTime: { ...text.caption, color: SUB, flexShrink: 0 },
-  cardMessage: { ...text.body, fontSize: 14, color: SUB, lineHeight: 20 },
-  cardMessageUnread: { color: INK },
+  moreBtn: { padding: 6 },
+
+  /* ⋯ menu sheet */
+  sheetOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.45)', justifyContent: 'flex-end' },
+  sheet: {
+    backgroundColor: colors.card, borderTopLeftRadius: 20, borderTopRightRadius: 20,
+    paddingHorizontal: space.xl, paddingTop: 10,
+  },
+  sheetHandle: { width: 36, height: 4, borderRadius: 2, backgroundColor: BORDER, alignSelf: 'center', marginBottom: 14 },
+  sheetTitle: { ...text.caption, color: SUB, marginBottom: 6 },
+  sheetRow: {
+    flexDirection: 'row', alignItems: 'center', gap: 14,
+    paddingVertical: 16, borderTopWidth: 1, borderTopColor: BORDER,
+  },
+  sheetRowText: { ...text.bodyBold, fontSize: 15, color: INK },
+  sheetCancel: {
+    alignItems: 'center', paddingVertical: 14, marginTop: 4,
+    borderTopWidth: 1, borderTopColor: BORDER,
+  },
+  sheetCancelText: { ...text.bodyBold, fontSize: 15, color: SUB },
+
+  /* swipe action */
+  swipeDelete: {
+    width: 88, backgroundColor: RED,
+    alignItems: 'center', justifyContent: 'center', gap: 2,
+  },
+  swipeDeleteText: { ...text.smallBold, color: '#fff' },
+
+  /* undo toast */
+  toast: {
+    position: 'absolute',
+    left: space.xl, right: space.xl, bottom: TAB_BAR_CLEARANCE,
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    backgroundColor: INK, borderRadius: radius.lg,
+    paddingHorizontal: space.lg, paddingVertical: space.md,
+  },
+  toastText: { ...text.body, fontSize: 14, color: BG },
+  toastUndo: { ...text.bodyBold, fontSize: 14, color: colors.white },
 
   /* empty */
   emptyContainer: { flex: 1, justifyContent: 'center' },
@@ -553,41 +536,4 @@ const styles = StyleSheet.create({
   },
   emptyTitle: { ...text.heading, fontSize: 16, color: INK },
   emptyText: { ...text.body, fontSize: 13, color: SUB, textAlign: 'center', lineHeight: 19 },
-
-  /* detail sheet */
-  sheetOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.45)', justifyContent: 'flex-end' },
-  sheet: {
-    backgroundColor: colors.card, borderTopLeftRadius: 20, borderTopRightRadius: 20,
-    paddingHorizontal: 20, paddingTop: 10, maxHeight: '85%',
-  },
-  sheetHandle: { width: 36, height: 4, borderRadius: 2, backgroundColor: BORDER, alignSelf: 'center', marginBottom: 14 },
-  sheetHeader: { flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 16 },
-  sheetIconWrap: {
-    width: 44, height: 44, borderRadius: radius.lg,
-    backgroundColor: colors.muted, alignItems: 'center', justifyContent: 'center',
-  },
-  sheetTitle: { ...text.heading, fontSize: 16.5, color: INK },
-  sheetSub: { ...text.caption, color: SUB, marginTop: 2 },
-  sheetCloseBtn: {
-    width: 32, height: 32, borderRadius: 16, backgroundColor: BG,
-    alignItems: 'center', justifyContent: 'center',
-  },
-
-  detailBody: { marginBottom: 8 },
-  detailMessage: { ...text.body, fontSize: 13.5, color: INK, lineHeight: 20, marginBottom: 14 },
-  detailInfoCard: { backgroundColor: BG, borderRadius: 12, padding: 12, gap: 9 },
-  detailInfoRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  detailInfoText: { ...text.body, fontSize: 12.5, color: INK },
-
-  actionsSection: { marginTop: 6 },
-  actionsSectionTitle: { ...text.smallBold, color: SUB, marginBottom: 8 },
-  actionsCard: {
-    backgroundColor: colors.card, borderRadius: 14, borderWidth: 1, borderColor: BORDER,
-    overflow: 'hidden',
-  },
-  actionRow: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 14, paddingVertical: 13 },
-  actionIconWrap: { width: 36, height: 36, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
-  actionLabel: { ...text.bodyBold, fontSize: 13.5, color: INK },
-  actionSublabel: { ...text.caption, color: SUB, marginTop: 1 },
-  actionDivider: { height: 1, backgroundColor: BORDER, marginLeft: 62 },
 });
