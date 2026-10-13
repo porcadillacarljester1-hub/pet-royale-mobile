@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity, StyleSheet, ActivityIndicator, StatusBar,
   ScrollView, KeyboardAvoidingView, Keyboard, Platform, Alert,
@@ -6,7 +6,8 @@ import {
 import { router } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { supabase } from '../lib/supabase';
-import { colors, space, shadow, common, sz } from '../constants/theme';
+import { colors, space, common, radius } from '../constants/theme';
+import FloatField from '../components/FloatField';
 import { Skeleton } from '../components/Skeleton';
 import { ScreenHeader } from '../components/ScreenHeader';
 import { tidy, useClientProfile } from '../lib/useClientProfile';
@@ -28,10 +29,10 @@ export default function AccountNameScreen() {
   if (!ready) {
     return (
       <View style={styles.container}>
-        <ScreenHeader title="Name" onBack={() => router.back()} large />
+        <ScreenHeader title="Account name" onBack={() => router.back()} large />
         <View style={styles.form}>
-          <Skeleton width="100%" height={76} />
-          <Skeleton width="100%" height={76} />
+          <Skeleton width="100%" height={60} radius={radius.md} />
+          <Skeleton width="100%" height={60} radius={radius.md} />
         </View>
       </View>
     );
@@ -47,6 +48,9 @@ function AccountNameForm({ profile }: { profile: ClientProfile }) {
   const [isSaving, setIsSaving] = useState(false);
   const [focused, setFocused] = useState<'first' | 'last' | null>(null);
   const [keyboardOpen, setKeyboardOpen] = useState(false);
+
+  const firstRef = useRef<TextInput>(null);
+  const lastRef = useRef<TextInput>(null);
 
   useEffect(() => {
     const show = Keyboard.addListener(Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow', () => setKeyboardOpen(true));
@@ -96,7 +100,7 @@ function AccountNameForm({ profile }: { profile: ClientProfile }) {
   return (
     <KeyboardAvoidingView style={styles.container} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
       <StatusBar barStyle="dark-content" backgroundColor={colors.background} />
-      <ScreenHeader title="Account Name" onBack={handleBack} large />
+      <ScreenHeader title="Account name" onBack={handleBack} large />
 
       <ScrollView
         style={styles.flex}
@@ -106,38 +110,34 @@ function AccountNameForm({ profile }: { profile: ClientProfile }) {
         automaticallyAdjustKeyboardInsets
         showsVerticalScrollIndicator={false}
       >
-        <View>
-          <Text style={common.label}>First name</Text>
-          <TextInput
-            style={[styles.input, focused === 'first' && styles.inputFocused]}
-            value={firstName}
-            onChangeText={setFirstName}
-            onFocus={() => setFocused('first')}
-            onBlur={() => setFocused(null)}
-            placeholder="e.g., John"
-            placeholderTextColor={colors.mutedFg}
-            autoCapitalize="words"
-            autoComplete="name-given"
-            returnKeyType="next"
-            editable={!isSaving}
-          />
-        </View>
-        <View>
-          <Text style={common.label}>Last name</Text>
-          <TextInput
-            style={[styles.input, focused === 'last' && styles.inputFocused]}
-            value={lastName}
-            onChangeText={setLastName}
-            onFocus={() => setFocused('last')}
-            onBlur={() => setFocused(null)}
-            placeholder="e.g., Doe"
-            placeholderTextColor={colors.mutedFg}
-            autoCapitalize="words"
-            autoComplete="name-family"
-            returnKeyType="done"
-            editable={!isSaving}
-          />
-        </View>
+        <FloatField
+          label="First name"
+          value={firstName}
+          focused={focused === 'first'}
+          inputRef={firstRef}
+          onChangeText={setFirstName}
+          onFocus={() => setFocused('first')}
+          onBlur={() => setFocused(null)}
+          autoCapitalize="words"
+          autoComplete="name-given"
+          returnKeyType="next"
+          blurOnSubmit={false}
+          onSubmitEditing={() => lastRef.current?.focus()}
+          editable={!isSaving}
+        />
+        <FloatField
+          label="Last name"
+          value={lastName}
+          focused={focused === 'last'}
+          inputRef={lastRef}
+          onChangeText={setLastName}
+          onFocus={() => setFocused('last')}
+          onBlur={() => setFocused(null)}
+          autoCapitalize="words"
+          autoComplete="name-family"
+          returnKeyType="done"
+          editable={!isSaving}
+        />
       </ScrollView>
 
       <View style={[styles.footer, footerPadding]}>
@@ -164,8 +164,6 @@ const styles = StyleSheet.create({
   container: { ...common.screen },
   flex: { flex: 1 },
   form: { padding: space.xxl, gap: space.lg },
-  input: { ...common.input, height: undefined, minHeight: sz(52), paddingVertical: 0, textAlignVertical: 'center' },
-  inputFocused: { borderWidth: 2, borderColor: colors.primary, paddingHorizontal: space.lg - 1 },
   footer: {
     paddingHorizontal: space.xxl,
     paddingTop: space.md,
@@ -173,5 +171,6 @@ const styles = StyleSheet.create({
     borderTopColor: colors.border,
     backgroundColor: colors.background,
   },
-  saveBtn: { ...common.buttonPrimary, ...shadow.primary },
+  /* Flat: the shadow drew a pale box around the button on Android. */
+  saveBtn: { ...common.buttonPrimary },
 });

@@ -2,6 +2,7 @@ import { useState, useCallback, useEffect } from 'react';
 import {
   View,
   Text,
+  Image,
   StyleSheet,
   ScrollView,
   TouchableOpacity,
@@ -12,20 +13,32 @@ import {
 import { supabase } from '../../lib/supabase';
 import { useRouter, useFocusEffect } from 'expo-router';
 import {
-  MapPin, Phone, Mail, Clock,
+  MapPin, Phone, Mail, Clock, Globe, AlertTriangle,
   Stethoscope, Scissors, ExternalLink,
 } from 'lucide-react-native';
 import { colors, text, space, radius, common } from '../../constants/theme';
 import { TAB_BAR_CLEARANCE } from './_layout';
 import { Skeleton, SkeletonRow } from '../../components/Skeleton';
 import { ScreenHeader } from '../../components/ScreenHeader';
-import { ServiceIcon } from '../../lib/serviceIcons';
 import { fmtTime, openDays, closingTime } from '../../lib/format';
 
-/* The clinic's bio. Write or change the text here: this is the only
-   place it lives. It isn't read from the database. */
+/* The clinic's bio. The admin's Clinic details can set a short
+   description; until it does, this line is shown. */
 const ABOUT_US =
   'Pet Royale Clinic and Veterinary Services provides excellent healthcare of all companion animals.';
+
+const GOLD = '#F5C518';
+const DANGER = '#9A3B2B';
+const DANGER_TILE = '#F3E1DB';
+
+const initialsOf = (name?: string | null) =>
+  (name || 'Pet Royale')
+    .split(' ')
+    .filter(Boolean)
+    .map((p) => p[0])
+    .slice(0, 2)
+    .join('')
+    .toUpperCase();
 
 export default function AboutScreen() {
   const router = useRouter();
@@ -100,12 +113,35 @@ export default function AboutScreen() {
     return acc;
   }, []);
 
+  /* canOpenURL is unreliable for web links on Android 11+ (it says no
+     unless the app declares package visibility), so try to open the link
+     and only complain if that really fails. */
   const open = (url: string, label: string) => {
-    Linking.canOpenURL(url).then((can) => {
-      if (can) Linking.openURL(url);
-      else Alert.alert('Not available', `Couldn't open ${label} on this device.`);
+    Linking.openURL(url).catch(() => {
+      Alert.alert('Not available', `Couldn't open ${label} on this device.`);
     });
   };
+
+  /* The admin can paste an exact Google Maps link. Without one, the
+     address is searched on the map, as before. */
+  const mapsUrl: string | null = clinic?.map_link
+    ? clinic.map_link
+    : clinic?.address
+      ? `https://maps.google.com/?q=${encodeURIComponent(clinic.address)}`
+      : null;
+
+  const facebookUrl: string | null = clinic?.facebook_url
+    ? (/^https?:\/\//i.test(clinic.facebook_url) ? clinic.facebook_url : `https://${clinic.facebook_url}`)
+    : null;
+
+  const hasContact = !!(
+    clinic?.address || clinic?.phone_number || clinic?.emergency_phone ||
+    clinic?.email || facebookUrl
+  );
+
+  /* Rows only draw a divider above themselves when something is above. */
+  let shown = 0;
+  const rowStyle = () => [styles.row, shown++ > 0 && styles.rowBordered];
 
   return (
     <View style={styles.container}>
@@ -117,52 +153,68 @@ export default function AboutScreen() {
         contentContainerStyle={[styles.scroll, { paddingBottom: TAB_BAR_CLEARANCE }]}
         showsVerticalScrollIndicator={false}
       >
-        {/* ── About us ── */}
-        <View style={[styles.section, styles.sectionFirst]}>
-          <Text style={styles.sectionTitle}>About us</Text>
-          <View style={styles.card}>
-            {loading ? (
-              <View style={styles.aboutSkeleton}>
-                <Skeleton width="100%" height={13} />
-                <Skeleton width="92%" height={13} />
-                <Skeleton width="60%" height={13} />
-              </View>
-            ) : (
-              <View style={styles.aboutBody}>
-                <Text style={styles.aboutText}>{ABOUT_US}</Text>
+        {/* ── Who we are ── */}
+        <View style={styles.hero}>
+          {clinic?.logo_url ? (
+            <Image
+              source={{ uri: clinic.logo_url }}
+              style={styles.logo}
+              accessibilityLabel="Clinic logo"
+            />
+          ) : (
+            <View style={[styles.logo, styles.logoFallback]}>
+              <Text style={styles.logoInitials}>{initialsOf(clinic?.clinic_name)}</Text>
+            </View>
+          )}
 
-                {categories.length > 0 && (
-                  <View>
-                    <Text style={styles.aboutLabel}>What we offer</Text>
-                    <View style={styles.serviceList}>
-                      {categories.map((c: any) => (
-                        <View key={c.name} style={styles.serviceItem}>
-                          <View style={styles.serviceIcon}>
-                            <ServiceIcon
-                              name={c.name}
-                              size={17}
-                              color={colors.primary}
-                              strokeWidth={1.9}
-                            />
-                          </View>
-                          <Text style={styles.serviceText}>{c.name}</Text>
-                        </View>
-                      ))}
-                    </View>
-                  </View>
-                )}
-              </View>
-            )}
-          </View>
+          <Text style={styles.clinicName}>{clinic?.clinic_name || 'Pet Royale'}</Text>
+          <Text style={styles.clinicTag}>Clinic and Veterinary Services</Text>
+
+          {loading ? (
+            <View style={styles.heroSkeleton}>
+              <Skeleton width="100%" height={13} />
+              <Skeleton width="70%" height={13} />
+            </View>
+          ) : (
+            <Text style={styles.heroText}>{clinic?.description?.trim() || ABOUT_US}</Text>
+          )}
         </View>
+
+        {/* ── Quick actions: call and directions ── */}
+        {!loading && (clinic?.phone_number || mapsUrl) ? (
+          <View style={styles.actions}>
+            {clinic?.phone_number ? (
+              <TouchableOpacity
+                style={[styles.action, styles.actionPrimary]}
+                onPress={() => open(`tel:${clinic.phone_number}`, 'the phone app')}
+                activeOpacity={0.85}
+                accessibilityRole="button"
+                accessibilityLabel="Call the clinic"
+              >
+                <Phone size={17} color="#FFFFFF" strokeWidth={2} />
+                <Text style={styles.actionPrimaryText}>Call</Text>
+              </TouchableOpacity>
+            ) : null}
+            {mapsUrl ? (
+              <TouchableOpacity
+                style={[styles.action, styles.actionOutline]}
+                onPress={() => open(mapsUrl, 'Maps')}
+                activeOpacity={0.7}
+                accessibilityRole="button"
+                accessibilityLabel="Get directions to the clinic"
+              >
+                <MapPin size={17} color={colors.primary} strokeWidth={2} />
+                <Text style={styles.actionOutlineText}>Directions</Text>
+              </TouchableOpacity>
+            ) : null}
+          </View>
+        ) : null}
 
         {/* ── Clinic information ──
                Every row acts: the address opens maps, the phone dials,
                the email composes. A number you have to copy out by hand
                is a number nobody rings. */}
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Clinic information</Text>
-
           <View style={styles.card}>
             {loading && [0, 1, 2].map((i) => (
               <SkeletonRow key={i} tile={40} style={[styles.row, i > 0 && styles.rowBordered]} />
@@ -170,11 +222,8 @@ export default function AboutScreen() {
 
             {clinic?.address ? (
               <TouchableOpacity
-                style={styles.row}
-                onPress={() => open(
-                  `https://maps.google.com/?q=${encodeURIComponent(clinic.address)}`,
-                  'Maps'
-                )}
+                style={rowStyle()}
+                onPress={() => open(mapsUrl as string, 'Maps')}
                 activeOpacity={0.7}
                 accessibilityRole="link"
                 accessibilityLabel={`Address: ${clinic.address}. Opens in maps.`}
@@ -192,7 +241,7 @@ export default function AboutScreen() {
 
             {clinic?.phone_number ? (
               <TouchableOpacity
-                style={[styles.row, styles.rowBordered]}
+                style={rowStyle()}
                 onPress={() => open(`tel:${clinic.phone_number}`, 'the phone app')}
                 activeOpacity={0.7}
                 accessibilityRole="link"
@@ -209,9 +258,28 @@ export default function AboutScreen() {
               </TouchableOpacity>
             ) : null}
 
+            {clinic?.emergency_phone ? (
+              <TouchableOpacity
+                style={rowStyle()}
+                onPress={() => open(`tel:${clinic.emergency_phone}`, 'the phone app')}
+                activeOpacity={0.7}
+                accessibilityRole="link"
+                accessibilityLabel={`After hours or emergency: ${clinic.emergency_phone}. Calls the clinic.`}
+              >
+                <View style={[styles.rowIcon, { backgroundColor: DANGER_TILE }]}>
+                  <AlertTriangle size={18} color={DANGER} strokeWidth={1.9} />
+                </View>
+                <View style={styles.rowCopy}>
+                  <Text style={styles.rowLabel}>After hours or emergency</Text>
+                  <Text style={styles.rowValue}>{clinic.emergency_phone}</Text>
+                </View>
+                <ExternalLink size={14} color={colors.mutedFg} />
+              </TouchableOpacity>
+            ) : null}
+
             {clinic?.email ? (
               <TouchableOpacity
-                style={[styles.row, styles.rowBordered]}
+                style={rowStyle()}
                 onPress={() => open(`mailto:${clinic.email}`, 'your mail app')}
                 activeOpacity={0.7}
                 accessibilityRole="link"
@@ -237,7 +305,28 @@ export default function AboutScreen() {
               </TouchableOpacity>
             ) : null}
 
-            {!loading && !clinic?.address && !clinic?.phone_number && !clinic?.email && (
+            {facebookUrl ? (
+              <TouchableOpacity
+                style={rowStyle()}
+                onPress={() => open(facebookUrl, 'Facebook')}
+                activeOpacity={0.7}
+                accessibilityRole="link"
+                accessibilityLabel="Facebook page. Opens in Facebook or your browser."
+              >
+                <View style={styles.rowIcon}>
+                  <Globe size={18} color={colors.primary} strokeWidth={1.9} />
+                </View>
+                <View style={styles.rowCopy}>
+                  <Text style={styles.rowLabel}>Facebook</Text>
+                  <Text style={styles.rowValue} numberOfLines={1}>
+                    {facebookUrl.replace(/^https?:\/\/(www\.)?/i, '')}
+                  </Text>
+                </View>
+                <ExternalLink size={14} color={colors.mutedFg} />
+              </TouchableOpacity>
+            ) : null}
+
+            {!loading && !hasContact && (
               <View style={styles.row}>
                 <View style={styles.rowIcon}>
                   <MapPin size={18} color={colors.mutedFg} strokeWidth={1.9} />
@@ -252,23 +341,26 @@ export default function AboutScreen() {
 
         {/* ── Hours ── */}
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Opening hours</Text>
-
           <View style={styles.card}>
+            <View style={styles.cardHead}>
+              <Clock size={17} color={colors.primary} strokeWidth={2} />
+              <Text style={styles.cardHeadText}>Opening hours</Text>
+            </View>
+
             {loading ? (
               [0, 1].map((i) => (
-                <SkeletonRow key={i} tile={40} style={[styles.row, i > 0 && styles.rowBordered]} />
+                <SkeletonRow key={i} tile={40} style={[styles.row, styles.rowBordered]} />
               ))
             ) : schedules.length === 0 ? (
-              <View style={styles.row}>
+              <View style={[styles.row, styles.rowBordered]}>
                 <View style={styles.rowIcon}>
                   <Clock size={18} color={colors.mutedFg} strokeWidth={1.9} />
                 </View>
                 <Text style={styles.rowEmpty}>Hours haven&apos;t been set yet.</Text>
               </View>
             ) : (
-              schedules.map((s: any, i: number) => (
-                <View key={s.key} style={[styles.row, i > 0 && styles.rowBordered]}>
+              schedules.map((s: any) => (
+                <View key={s.key} style={[styles.row, styles.rowBordered]}>
                   <View style={styles.rowIcon}>
                     {s.isGrooming
                       ? <Scissors size={18} color={colors.primary} strokeWidth={1.9} />
@@ -302,43 +394,73 @@ const styles = StyleSheet.create({
 
   scroll: { paddingBottom: space.xxxl },
 
-  section: { paddingHorizontal: space.xl, marginBottom: space.xxl },
-  /* The brand panel used to sit above the first section. */
-  sectionFirst: { marginTop: space.xl },
-  /* Same heading style as the other screens. */
-  sectionTitle: {
-    ...text.section,
-    color: colors.foreground,
-    marginBottom: space.md,
+  hero: {
+    alignItems: 'center',
+    paddingHorizontal: space.xl,
+    paddingTop: space.xl,
   },
-
-  card: { ...common.card, padding: 0, overflow: 'hidden' },
-
-  aboutSkeleton: { padding: space.lg, gap: space.sm },
-  aboutBody: { padding: space.lg, gap: space.lg },
-  aboutText: {
-    ...text.small,
-    color: colors.foreground,
-    lineHeight: 21,
-  },
-  aboutLabel: {
-    ...text.caption,
-    color: colors.mutedFg,
-    marginBottom: space.md,
-  },
-  serviceList: { gap: space.md },
-  serviceItem: { flexDirection: 'row', alignItems: 'center', gap: space.md },
-  serviceIcon: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: colors.muted,
+  logo: { width: 84, height: 84, borderRadius: 24 },
+  logoFallback: {
+    backgroundColor: colors.primary,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  /* flex: 1 lets a long service name wrap beside the icon instead of
-     running past the card edge. */
-  serviceText: { ...text.smallBold, color: colors.foreground, flex: 1 },
+  logoInitials: { fontSize: 30, fontWeight: '700', fontStyle: 'italic', color: GOLD },
+  clinicName: {
+    ...text.section,
+    fontSize: 24,
+    fontWeight: '700',
+    color: colors.foreground,
+    textAlign: 'center',
+    marginTop: space.lg,
+  },
+  clinicTag: {
+    ...text.small,
+    color: colors.mutedFg,
+    textAlign: 'center',
+    marginTop: 2,
+  },
+  heroText: {
+    ...text.small,
+    color: colors.foreground,
+    lineHeight: 21,
+    textAlign: 'center',
+    marginTop: space.md,
+  },
+  heroSkeleton: { alignSelf: 'stretch', gap: space.sm, marginTop: space.md },
+
+  actions: {
+    flexDirection: 'row',
+    gap: space.md,
+    paddingHorizontal: space.xl,
+    marginTop: space.xl,
+  },
+  action: {
+    flex: 1,
+    height: 48,
+    borderRadius: 24,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+  },
+  actionPrimary: { backgroundColor: colors.primary },
+  actionPrimaryText: { ...text.bodyBold, color: '#FFFFFF' },
+  actionOutline: { borderWidth: 1.5, borderColor: colors.primary },
+  actionOutlineText: { ...text.bodyBold, color: colors.primary },
+
+  section: { paddingHorizontal: space.xl, marginTop: space.xl },
+
+  card: { ...common.card, padding: 0, overflow: 'hidden' },
+  cardHead: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: space.sm,
+    paddingHorizontal: space.lg,
+    paddingTop: space.lg,
+    paddingBottom: space.xs,
+  },
+  cardHeadText: { ...text.bodyBold, color: colors.foreground },
 
   row: {
     flexDirection: 'row',
@@ -359,8 +481,8 @@ const styles = StyleSheet.create({
   /* minWidth: 0 lets the text column actually shrink beside the icons. */
   rowCopy: { flex: 1, minWidth: 0 },
   rowLabel: { ...text.caption, color: colors.mutedFg },
-  rowValue: { ...text.small, color: colors.foreground, marginTop: 2 },
-  rowEmpty: { ...text.small, color: colors.mutedFg, flex: 1 },
+  rowValue: { ...text.body, color: colors.foreground, marginTop: 2 },
+  rowEmpty: { ...text.body, color: colors.mutedFg, flex: 1 },
 
   note: {
     ...text.caption,

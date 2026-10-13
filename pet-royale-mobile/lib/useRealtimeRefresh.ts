@@ -27,7 +27,9 @@ export function useRealtimeRefresh(table: string, refetch: () => void, filter?: 
         { event: '*', schema: 'public', table, ...(filter ? { filter } : {}) },
         trigger
       )
-      .subscribe();
+        .subscribe((status, err) => {
+        if (__DEV__) console.log(`[realtime:${table}]`, status, err?.message ?? '');
+      });
 
     // Also refresh when the app comes back from the background
     const appState = AppState.addEventListener('change', (s) => {

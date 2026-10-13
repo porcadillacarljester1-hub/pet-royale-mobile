@@ -78,7 +78,7 @@ export async function registerForPushNotifications(): Promise<string | null> {
       return token;
     } catch (e) {
       console.log(`PUSH ERROR (attempt ${attempt}):`, e);
-      if (attempt < 3) await new Promise((r) => setTimeout(r, 2000 * attempt));
+      if (attempt < 3) await new Promise((r) => setTimeout(r, 5000 * attempt));
     }
   }
   return null;

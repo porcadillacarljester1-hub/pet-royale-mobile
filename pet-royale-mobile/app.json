@@ -10,7 +10,9 @@
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.dosie.petroyale",
-      "infoPlist": { "ITSAppUsesNonExemptEncryption": false }
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false
+      }
     },
     "android": {
       "package": "com.dosie.petroyale",
@@ -34,13 +36,18 @@
           "color": "#051F42"
         }
       ],
+       [
+        "expo-build-properties",
+        {
+          "android": { "minSdkVersion": 26 }
+        }
+      ],
       [
         "expo-splash-screen",
         {
-          "image": "./assets/images/splash-icon.png",
-          "imageWidth": 200,
+          "image": "./assets/images/splash-startup.png",
+          "imageWidth": 386,
           "backgroundColor": "#051F42"
-          
         }
       ],
       [

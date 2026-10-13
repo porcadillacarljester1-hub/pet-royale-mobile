@@ -8,6 +8,7 @@ import { ScreenHeader } from '../components/ScreenHeader';
 import { getCountry, toE164 } from '../lib/phone';
 import { useClientProfile } from '../lib/useClientProfile';
 
+
 /**
  * Personal information, list version: each detail is a row that opens its
  * own small edit screen, so there is no Save button here. Email is shown
@@ -204,7 +205,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: space.lg,
   },
   rowCopy: { flex: 1, minWidth: 0 },
-  rowLabel: { ...text.small, color: colors.mutedFg },
+  rowLabel: { ...text.caption, color: colors.mutedFg },
   rowValue: { ...text.bodyBold, color: colors.foreground, marginTop: 2 },
   rowPlaceholder: { color: colors.mutedFg },
 

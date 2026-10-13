@@ -6,7 +6,7 @@ import {
 import { router } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { supabase } from '../lib/supabase';
-import { colors, status, text, space, shadow, common } from '../constants/theme';
+import { colors, status, text, space, common } from '../constants/theme';
 import { Skeleton } from '../components/Skeleton';
 import { ScreenHeader } from '../components/ScreenHeader';
 import { PhoneInput } from '../components/PhoneInput';
@@ -40,7 +40,7 @@ export default function AccountMobileScreen() {
       <View style={styles.container}>
         <ScreenHeader title="Mobile number" onBack={() => router.back()} large />
         <View style={styles.form}>
-          <Skeleton width="100%" height={76} />
+          <Skeleton width="100%" height={60} />
         </View>
       </View>
     );
@@ -120,9 +120,11 @@ function AccountMobileForm({ profile }: { profile: ClientProfile }) {
         showsVerticalScrollIndicator={false}
       >
         <View>
-          <Text style={common.label}>Mobile number</Text>
+          {/* The label floats inside the number field, so there's no
+              separate label line above it. */}
           <PhoneInput
-            variant="field"
+            variant="float"
+            label="Mobile number"
             iso={countryIso}
             national={national}
             onChangeIso={(iso) => { setCountryIso(iso); if (phoneError) setPhoneError(''); }}
@@ -168,5 +170,5 @@ const styles = StyleSheet.create({
     borderTopColor: colors.border,
     backgroundColor: colors.background,
   },
-  saveBtn: { ...common.buttonPrimary, ...shadow.primary },
+  saveBtn: { ...common.buttonPrimary },
 });

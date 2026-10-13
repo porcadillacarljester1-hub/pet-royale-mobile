@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef, useEffect } from 'react';
+import { useState, useCallback, useRef, useEffect, useDeferredValue } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput,
   RefreshControl, Animated, useWindowDimensions,
@@ -6,9 +6,10 @@ import {
 import { supabase } from '../../lib/supabase';
 import { useFocusEffect } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { Search, X, ShoppingBag, AlertCircle } from 'lucide-react-native';
+import { X, ShoppingBag, AlertCircle } from 'lucide-react-native';
 import { colors, text, fonts, space, radius, common, hitSlop, status } from '../../constants/theme';
 import { TAB_BAR_CLEARANCE } from './_layout';
+import FloatField from '../../components/FloatField';
 import { Skeleton } from '../../components/Skeleton';
 import { ProductCard, ProductCardSkeleton } from '../../components/ProductCard';
 import { useRealtimeRefresh } from '../../lib/useRealtimeRefresh';
@@ -42,6 +43,11 @@ export default function ProductsScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [loadError, setLoadError] = useState('');
   const [search, setSearch] = useState('');
+  const [searchFocused, setSearchFocused] = useState(false);
+  const searchRef = useRef<TextInput>(null);
+  // The field updates instantly; the list filters a beat later, so typing
+  // never waits on re-rendering the product grid.
+  const deferredSearch = useDeferredValue(search);
   const [activeCategory, setActiveCategory] = useState<string | null>(null);
 
   const [fadeContent] = useState(() => new Animated.Value(0));
@@ -87,7 +93,7 @@ export default function ProductsScreen() {
 
   const categories = [...new Set(products.map((p) => p.category))];
 
-  const query = search.trim().toLowerCase();
+  const query = deferredSearch.trim().toLowerCase();
   const filtered = products.filter((p) => {
     const matchesSearch = !query || p.name.toLowerCase().includes(query);
     const matchesCategory = !activeCategory || p.category === activeCategory;
@@ -115,78 +121,83 @@ export default function ProductsScreen() {
         </Text>
       </View>
 
-      {/* ── Search ── */}
+      {/* ── Search ── floating-label field, same as sign-in */}
       <View style={styles.searchWrap}>
-        <Search size={16} color={colors.mutedFg} strokeWidth={2} />
-        <TextInput
-          style={styles.searchInput}
-          placeholder="Search products..."
-          placeholderTextColor={colors.mutedFg}
+        <FloatField
+          label="Search products"
           value={search}
+          focused={searchFocused}
+          inputRef={searchRef}
           onChangeText={setSearch}
-          returnKeyType="search"
+          onFocus={() => setSearchFocused(true)}
+          onBlur={() => setSearchFocused(false)}
           autoCorrect={false}
-          accessibilityLabel="Search products"
+          returnKeyType="search"
+          right={
+            search.length > 0 ? (
+              <TouchableOpacity
+                style={styles.clearBtn}
+                onPress={() => setSearch('')}
+                hitSlop={hitSlop}
+                activeOpacity={0.7}
+                accessibilityRole="button"
+                accessibilityLabel="Clear search"
+              >
+                <X size={20} color={colors.mutedFg} strokeWidth={2} />
+              </TouchableOpacity>
+            ) : undefined
+          }
         />
-        {search.length > 0 && (
-          <TouchableOpacity
-            onPress={() => setSearch('')}
-            hitSlop={hitSlop}
-            accessibilityRole="button"
-            accessibilityLabel="Clear search"
-          >
-            <X size={16} color={colors.mutedFg} strokeWidth={2} />
-          </TouchableOpacity>
-        )}
       </View>
 
-      {/* ── Category filter chips ──
-             flexGrow: 0 keeps the row at the height of its chips. A
-             horizontal ScrollView otherwise stretches to fill the column,
-             which pushes the product list down the screen.
-             keyboardShouldPersistTaps lets the first tap select a chip
+      {/* ── Category tabs ── segmented pill like the sign-in toggle.
+             The outer View keeps the row at the height of its chips
+             (flexGrow/flexShrink 0), since a horizontal ScrollView
+             otherwise stretches or gets squeezed beside the product list.
+             keyboardShouldPersistTaps lets the first tap select a tab
              instead of only dismissing the keyboard. */}
       {isLoading ? (
-        <View style={styles.categoryRow}>
+        <View style={[styles.segment, styles.segmentRow]}>
           <Skeleton width={56} height={44} radius={radius.pill} />
           <Skeleton width={112} height={44} radius={radius.pill} />
           <Skeleton width={96} height={44} radius={radius.pill} />
         </View>
       ) : categories.length > 0 && (
-        <ScrollView
-          horizontal
-          style={styles.categoryScroll}
-          keyboardShouldPersistTaps="handled"
-          showsHorizontalScrollIndicator={false}
-          contentContainerStyle={styles.categoryRow}
-        >
-          <TouchableOpacity
-            style={[styles.categoryChip, !activeCategory && styles.categoryChipActive]}
-            onPress={() => setActiveCategory(null)}
-            activeOpacity={0.8}
-            accessibilityRole="button"
-            accessibilityState={{ selected: !activeCategory }}
-            accessibilityLabel="All categories"
+        <View style={styles.segment}>
+          <ScrollView
+            horizontal
+            keyboardShouldPersistTaps="handled"
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.segmentRow}
           >
-            <Text style={[styles.categoryChipText, !activeCategory && styles.categoryChipTextActive]} numberOfLines={1}>All</Text>
-          </TouchableOpacity>
-          {categories.map((cat) => {
-            const selected = activeCategory === cat;
-            return (
-              <TouchableOpacity
-                key={cat}
-                style={[styles.categoryChip, selected && styles.categoryChipActive]}
-                onPress={() => setActiveCategory(selected ? null : cat)}
-                activeOpacity={0.8}
-                accessibilityRole="button"
-                accessibilityState={{ selected }}
-                accessibilityLabel={cat}
-              >
-                <Text style={[styles.categoryChipText, selected && styles.categoryChipTextActive]} numberOfLines={1}>{cat}</Text>
-              </TouchableOpacity>
-            );
-          })}
-        </ScrollView>
+            <TouchableOpacity
+              style={[styles.categoryChip, !activeCategory && styles.categoryChipActive]}
+              onPress={() => setActiveCategory(null)}
+              activeOpacity={0.8}
+              accessibilityRole="button"
+              accessibilityState={{ selected: !activeCategory }}
+              accessibilityLabel="All categories"
+            >
+              <Text style={[styles.categoryChipText, !activeCategory && styles.categoryChipTextActive]} numberOfLines={1}>All</Text>
+            </TouchableOpacity>
+            {categories.map((cat) => {
+              const selected = activeCategory === cat;
+              return (
+                <TouchableOpacity
+                  key={cat}
+                  style={[styles.categoryChip, selected && styles.categoryChipActive]}
+                  onPress={() => setActiveCategory(selected ? null : cat)}
+                  activeOpacity={0.8}
+                  accessibilityRole="button"
+                  accessibilityState={{ selected }}
+                  accessibilityLabel={cat}
+                >
+                  <Text style={[styles.categoryChipText, selected && styles.categoryChipTextActive]} numberOfLines={1}>{cat}</Text>
+                </TouchableOpacity>
+              );
+            })}
+          </ScrollView>
+        </View>
       )}
 
       {/* ── Load error ── */}
@@ -254,37 +265,35 @@ const styles = StyleSheet.create({
   title: { ...text.screenTitle, color: colors.foreground },
   headerSub: { ...text.caption, color: colors.mutedFg, marginTop: 3 },
 
-  /* Search and chips sit on the same cream surface and border as the
-     cards, and are 44 high so they're easy to hit. */
-  searchWrap: {
-    flexDirection: 'row', alignItems: 'center', gap: space.sm,
-    minHeight: 44,
-    backgroundColor: colors.card, borderRadius: radius.md,
-    borderWidth: 1, borderColor: colors.cardBorder,
-    paddingHorizontal: space.md,
-    marginHorizontal: space.xxl, marginBottom: space.md,
-  },
-  searchInput: { flex: 1, ...text.small, color: colors.foreground, padding: 0 },
+  /* The shared FloatField draws its own box, so this is only spacing. */
+  searchWrap: { marginHorizontal: space.xxl, marginBottom: space.md },
+  clearBtn: { width: 48, height: 48, alignItems: 'center', justifyContent: 'center' },
 
-  // React Native's ScrollView defaults to flexShrink: 1, so with a tall
-  // vertical ScrollView beside it the chip row gets squeezed and clips
-  // its chips. flexShrink: 0 makes it keep the height of its content.
-  categoryScroll: { flexGrow: 0, flexShrink: 0 },
-  productList: { flex: 1 },
-  categoryRow: {
-    flexDirection: 'row', flexWrap: 'nowrap',
-    paddingHorizontal: space.xxl, gap: space.sm, paddingBottom: space.lg,
+  /* Segmented pill, like the Sign in / Create account toggle.
+     flexShrink: 0 stops the vertical ScrollView beside it from
+     squeezing the row and clipping the tabs. */
+  segment: {
+    flexGrow: 0, flexShrink: 0,
+    marginHorizontal: space.xxl, marginBottom: space.lg,
+    backgroundColor: colors.card, borderRadius: radius.pill,
+    borderWidth: 1, borderColor: colors.cardBorder,
+    padding: 4, overflow: 'hidden',
   },
+  segmentRow: { flexDirection: 'row', flexWrap: 'nowrap', gap: 4 },
+
+  productList: { flex: 1 },
+
   categoryChip: {
     flexShrink: 0, flexGrow: 0,
     minHeight: 44, justifyContent: 'center',
     paddingHorizontal: space.lg,
     borderRadius: radius.pill,
-    backgroundColor: colors.card,
-    borderWidth: 1, borderColor: colors.cardBorder,
+    backgroundColor: 'transparent',
   },
-  categoryChipActive: { backgroundColor: colors.primary, borderColor: colors.primary },
-  categoryChipText: { ...text.smallBold, color: colors.foreground },
+  categoryChipActive: { backgroundColor: colors.primary },
+  // Swap text.smallBold for the exact text style the Add Pet chips use,
+  // so the tab font size matches.
+  categoryChipText: { ...text.smallBold, color: colors.mutedFg },
   categoryChipTextActive: { color: colors.primaryFg },
 
   loadErrorBox: {

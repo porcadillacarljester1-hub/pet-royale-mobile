@@ -15,8 +15,13 @@ import { supabase } from '@/lib/supabase';
 import { useRouter } from 'expo-router';
 import * as ImagePicker from 'expo-image-picker';
 import * as ImageManipulator from 'expo-image-manipulator';
-import { fetchAvatarHistory, addAvatarHistoryEntry, type AvatarHistoryItem } from '@/lib/avatarHistory';
-import { colors, status, text, space, radius, shadow, common } from '@/constants/theme';
+import {
+  fetchAvatarHistory,
+  addAvatarHistoryEntry,
+  deleteAvatarHistoryEntry,
+  type AvatarHistoryItem,
+} from '@/lib/avatarHistory';
+import { colors, status, text, space, radius, hitSlop, common } from '@/constants/theme';
 import { ScreenHeader } from '@/components/ScreenHeader';
 import { PhotoCropper } from '@/components/PhotoCropper';
 
@@ -157,6 +162,38 @@ export default function ProfilePhotoScreen() {
     setSelectedIsExisting(true);
   };
 
+  /* The recent photo that's currently selected, if one is. A freshly
+     picked or cropped photo isn't in the history yet, so it has no
+     delete option. */
+  const selectedHistoryItem = selectedIsExisting
+    ? history.find((h) => h.photo_url === selectedUri)
+    : undefined;
+
+  /* Deletes the selected photo from Recent photos only. Every history row
+     with that URL goes (re-selecting a photo inserts a duplicate row), but
+     the account's current photo and the stored file are left alone. */
+  const deleteSelectedHistory = () => {
+    const item = selectedHistoryItem;
+    if (!item || !userId) return;
+    Alert.alert('Delete photo', 'Delete this photo from your recent photos?', [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Delete',
+        style: 'destructive',
+        onPress: async () => {
+          try {
+            await deleteAvatarHistoryEntry(userId, item.photo_url);
+            setHistory((prev) => prev.filter((h) => h.photo_url !== item.photo_url));
+            setSelectedUri(null);
+            setSelectedIsExisting(false);
+          } catch {
+            Alert.alert('Error', 'Couldn\u2019t delete the photo. Please try again.');
+          }
+        },
+      },
+    ]);
+  };
+
   /* Removing clears the photo on the account. It does not delete the
      history rows, so an old photo can still be chosen again. */
   const removePhoto = () => {
@@ -291,7 +328,24 @@ export default function ProfilePhotoScreen() {
         {/* ── Recent photos ── */}
         {history.length > 0 && (
           <View style={styles.recentSection}>
-            <Text style={styles.recentTitle}>Recent photos</Text>
+            {/* The delete action sits beside the heading, so it's on screen
+                the moment a photo is selected, with no scrolling to find it. */}
+            <View style={styles.recentHead}>
+              <Text style={styles.recentTitle}>Recent photos</Text>
+              {!!selectedHistoryItem && (
+                <TouchableOpacity
+                  style={styles.deleteBtn}
+                  onPress={deleteSelectedHistory}
+                  activeOpacity={0.7}
+                  hitSlop={hitSlop}
+                  accessibilityRole="button"
+                  accessibilityLabel="Delete selected photo"
+                >
+                  <Trash2 size={18} color={status.danger.fg} strokeWidth={1.9} />
+                  <Text style={styles.deleteText}>Delete</Text>
+                </TouchableOpacity>
+              )}
+            </View>
             <ScrollView
               horizontal
               showsHorizontalScrollIndicator={false}
@@ -340,10 +394,7 @@ export default function ProfilePhotoScreen() {
 
       <View style={[styles.footer, { paddingBottom: space.xxl + insets.bottom }]}>
         <TouchableOpacity
-          style={[
-            common.buttonPrimary,
-            saveDisabled ? common.buttonPrimaryDisabled : shadow.primary,
-          ]}
+          style={[common.buttonPrimary, saveDisabled && common.buttonPrimaryDisabled]}
           onPress={handleSave}
           disabled={saveDisabled}
           activeOpacity={0.85}
@@ -363,16 +414,16 @@ export default function ProfilePhotoScreen() {
   );
 }
 
-const PREVIEW = 160;
+const PREVIEW = 120;
 const RING_GAP = 5;
 const RING_WIDTH = 2;
 const PREVIEW_OUTER = PREVIEW + (RING_GAP + RING_WIDTH) * 2;
 
 const styles = StyleSheet.create({
   flex: { flex: 1 },
-  scrollContent: { paddingHorizontal: space.xl, paddingTop: space.xxl, paddingBottom: space.xl },
+  scrollContent: { paddingHorizontal: space.xl, paddingTop: space.md, paddingBottom: space.lg },
 
-  previewSection: { alignItems: 'center', marginBottom: space.xxl },
+  previewSection: { alignItems: 'center', marginBottom: space.md },
   previewRing: {
     width: PREVIEW_OUTER,
     height: PREVIEW_OUTER,
@@ -380,7 +431,7 @@ const styles = StyleSheet.create({
     borderWidth: RING_WIDTH,
     borderColor: colors.accent,
     padding: RING_GAP,
-    marginBottom: space.md,
+    marginBottom: space.sm,
   },
   previewImage: {
     width: PREVIEW,
@@ -402,14 +453,14 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: space.lg,
-    minHeight: 64,
-    paddingVertical: space.md,
+    minHeight: 54,
+    paddingVertical: space.sm,
     paddingHorizontal: space.xs,
   },
   optionIcon: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
+    width: 40,
+    height: 40,
+    borderRadius: 20,
     backgroundColor: colors.muted,
     alignItems: 'center',
     justifyContent: 'center',
@@ -418,10 +469,17 @@ const styles = StyleSheet.create({
   optionLabel: { ...text.bodyBold, color: colors.foreground, flex: 1 },
   optionLabelDanger: { color: status.danger.fg },
 
-  tip: { ...text.small, color: colors.mutedFg, marginTop: space.lg, paddingHorizontal: space.xs },
+  tip: { ...text.small, color: colors.mutedFg, marginTop: space.sm, paddingHorizontal: space.xs },
 
-  recentSection: { marginTop: space.xxl },
-  recentTitle: { ...text.section, color: colors.foreground, marginBottom: space.md },
+  recentSection: { marginTop: space.lg },
+  recentHead: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    minHeight: 44,
+    marginBottom: space.sm,
+  },
+  recentTitle: { ...text.section, color: colors.foreground },
   recentScroll: { marginHorizontal: -space.xl },
   recentRow: { gap: space.md, paddingHorizontal: space.xl },
   recentThumbWrap: {
@@ -447,6 +505,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  deleteBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, minHeight: 44 },
+  deleteText: { ...text.bodyBold, color: status.danger.fg },
 
   footer: {
     paddingHorizontal: space.xl,

@@ -4,28 +4,30 @@ import {
   Text,
   StyleSheet,
   ScrollView,
-  ActivityIndicator,
-  TouchableOpacity,
+  Pressable,
   Modal,
 } from 'react-native';
-import { X } from 'lucide-react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { X, Check } from 'lucide-react-native';
 import { supabase } from '../lib/supabase';
 import { colors, text, fonts, space, radius, hitSlop, status, sz } from '../constants/theme';
-import { peso, fmtPastDate } from '../lib/format';
+import { peso, fmtPastDate, fmtTime } from '../lib/format';
+import { Skeleton } from './Skeleton';
 
 /* ══════════════════ Receipt ══════════════════
-   The same document language as the admin's own invoice screen — a
-   real letterhead, an itemised table, honest totals — not just the
-   total the card already shows.
+   A bottom sheet, the way a phone shows a receipt: it slides up, the
+   amount comes first, the details sit below it, and a Done button stays
+   pinned at the bottom while the receipt scrolls.
 
-   No curved stamp text here. react-native-svg's support for text on a
-   path is inconsistent across iOS and Android, so "Paid" is a plain
-   rotated badge.
+   The amount and the Paid badge come from the invoice the card already
+   has, so they show at once while the line items load.
 
-   The stamp and "Total paid" are unconditional: every invoice reaching
-   this view is fully paid the moment it exists, and payments render as
-   one plain list. Every payment happens in person at the clinic, so
-   there's only ever one kind. */
+   "Paid" and "Total paid" are unconditional: every invoice reaching
+   this view is fully paid the moment it exists. Every payment happens
+   in person at the clinic, so there's only ever one kind.
+
+   A row with nothing to show (for example a visit with no date) is left
+   out instead of printing "No date". */
 export function ReceiptModal({
   visit, invoice, onClose,
 }: {
@@ -33,6 +35,7 @@ export function ReceiptModal({
   invoice?: { id: string; total: number; created_at: string };
   onClose: () => void;
 }) {
+  const insets = useSafeAreaInsets();
   const [loading, setLoading] = useState(true);
   const [items, setItems] = useState<any[]>([]);
   const [payments, setPayments] = useState<any[]>([]);
@@ -66,123 +69,136 @@ export function ReceiptModal({
   if (!invoice) return null;
 
   const invoiceNo = `INV-${invoice.id.slice(0, 6).toUpperCase()}`;
-  /* The date on the stamp is the real settlement date — the most
+  /* The date on the badge is the real settlement date — the most
      recent payment actually received — rather than invoice.created_at
      (when it was raised, which can be days before it's paid). */
   const settledDate = payments.length > 0
     ? payments.reduce((latest, p) => (p.paid_at > latest ? p.paid_at : latest), payments[0].paid_at)
     : invoice.created_at;
+  const paidLabel = settledDate ? `Paid on ${fmtPastDate(settledDate)}` : 'Paid';
   const clinicName = clinic?.clinic_name?.trim() || 'Pet Royale Clinic and Veterinary Services';
 
+  const visitWhen = visit.requested_date
+    ? [fmtPastDate(visit.requested_date), fmtTime(visit.scheduled_time)].filter(Boolean).join(' \u00b7 ')
+    : '';
+
+  const details = ([
+    ['Invoice no.', invoiceNo],
+    ['Date issued', invoice.created_at ? fmtPastDate(invoice.created_at) : ''],
+    ['Visit', visitWhen],
+    ['Pet', visit.pet_name],
+    ['Service', visit.service],
+  ] as [string, string][]).filter(([, value]) => !!value);
+
+  const meta = [clinic?.address, clinic?.phone_number, clinic?.email].filter(Boolean);
+
   return (
-    <Modal visible transparent statusBarTranslucent animationType="fade" onRequestClose={onClose}>
-      <View style={rStyles.backdrop}>
-        <TouchableOpacity
+    <Modal visible transparent statusBarTranslucent animationType="slide" onRequestClose={onClose}>
+      <View style={styles.backdrop}>
+        {/* Tapping the dimmed area closes the sheet. */}
+        <Pressable
           style={StyleSheet.absoluteFill}
-          activeOpacity={1}
           onPress={onClose}
+          accessibilityRole="button"
           accessibilityLabel="Close receipt"
         />
-        <View style={rStyles.sheet}>
+
+        <View
+          style={[styles.sheet, { paddingBottom: Math.max(insets.bottom, space.lg) }]}
+          accessibilityViewIsModal
+        >
+          <View style={styles.handle} />
+
           <ScrollView
-            style={rStyles.paper}
-            contentContainerStyle={rStyles.paperContent}
+            style={styles.scroll}
+            contentContainerStyle={styles.scrollContent}
             showsVerticalScrollIndicator={false}
           >
-            <View style={rStyles.stamp}>
-              <Text style={rStyles.stampText}>PAID</Text>
-              <Text style={rStyles.stampDate}>{fmtPastDate(settledDate)}</Text>
+            {/* Right padding keeps the name clear of the close button. */}
+            <View style={styles.letterhead}>
+              <Text style={styles.clinicName}>{clinicName}</Text>
+              {meta.length > 0 && <Text style={styles.clinicMeta}>{meta.join(' \u00b7 ')}</Text>}
             </View>
 
-            <View style={rStyles.letterhead}>
-              <Text style={rStyles.clinicName}>{clinicName}</Text>
-              {(clinic?.address || clinic?.phone_number || clinic?.email) && (
-                <Text style={rStyles.clinicMeta}>
-                  {[clinic?.address, clinic?.phone_number, clinic?.email].filter(Boolean).join(' · ')}
-                </Text>
+            <Text style={styles.amountLabel}>Amount paid</Text>
+            <Text
+              style={styles.amount}
+              numberOfLines={1}
+              adjustsFontSizeToFit
+              minimumFontScale={0.6}
+              accessibilityLabel={`Total paid ${peso(invoice.total)}`}
+            >
+              {peso(invoice.total)}
+            </Text>
+
+            <View style={styles.paidBadge}>
+              <Check size={14} color={status.success.fg} strokeWidth={2.4} />
+              <Text style={styles.paidBadgeText}>{paidLabel}</Text>
+            </View>
+
+            <View style={styles.rule} />
+
+            <View>
+              {details.map(([label, value]) => (
+                <View key={label} style={styles.kvRow}>
+                  <Text style={styles.kvLabel}>{label}</Text>
+                  <Text style={[styles.kvValue, label === 'Invoice no.' && styles.figure]}>{value}</Text>
+                </View>
+              ))}
+            </View>
+
+            <View style={styles.panel}>
+              <View style={styles.tableHeadRow}>
+                <Text style={[styles.th, styles.colItem]}>Item</Text>
+                <Text style={[styles.th, styles.colQty]}>Qty</Text>
+                <Text style={[styles.th, styles.colAmount]}>Amount</Text>
+              </View>
+
+              {loading ? (
+                <View style={styles.loadingBlock} accessibilityLabel="Loading receipt items" accessibilityLiveRegion="polite">
+                  <Skeleton width="70%" height={16} style={{ marginBottom: space.md }} />
+                  <Skeleton width="45%" height={16} />
+                </View>
+              ) : items.length === 0 ? (
+                <Text style={styles.noItems}>No line items on this invoice.</Text>
+              ) : (
+                items.map((it) => (
+                  <View key={it.id} style={styles.tableRow}>
+                    <Text style={[styles.td, styles.colItem]}>{it.service_name}</Text>
+                    <Text style={[styles.td, styles.colQty, styles.figure]}>{it.quantity}</Text>
+                    <Text style={[styles.tdBold, styles.colAmount, styles.figure]}>
+                      {peso(Number(it.subtotal))}
+                    </Text>
+                  </View>
+                ))
               )}
-            </View>
 
-            <View style={rStyles.rule} />
-
-            <View style={rStyles.metaRow}>
-              <View style={{ flex: 1 }}>
-                <Text style={rStyles.metaLabel}>Pet</Text>
-                <Text style={rStyles.metaValue}>{visit.pet_name}</Text>
-                <Text style={rStyles.metaSub}>{visit.service}</Text>
-              </View>
-              <View style={{ alignItems: 'flex-end' }}>
-                <Text style={rStyles.metaLabel}>Invoice</Text>
-                <Text style={[rStyles.metaValue, rStyles.figure]}>{invoiceNo}</Text>
-                <Text style={rStyles.metaSub}>{fmtPastDate(invoice.created_at)}</Text>
+              <View style={styles.grandRow}>
+                <Text style={styles.grandLabel}>Total paid</Text>
+                <Text style={[styles.grandValue, styles.figure]}>{peso(invoice.total)}</Text>
               </View>
             </View>
-
-            {loading ? (
-              <ActivityIndicator color={colors.primary} style={{ marginTop: space.xxl }} />
-            ) : (
-              <>
-                <View style={rStyles.table}>
-                  <View style={rStyles.tableHeadRow}>
-                    <Text style={[rStyles.th, { flex: 1.6 }]}>Service</Text>
-                    <Text style={[rStyles.th, rStyles.tRight]}>Qty</Text>
-                    <Text style={[rStyles.th, rStyles.tRight, { flex: 1 }]}>Amount</Text>
-                  </View>
-                  {items.length === 0 ? (
-                    <Text style={rStyles.noItems}>No line items on this invoice.</Text>
-                  ) : (
-                    items.map((it) => (
-                      <View key={it.id} style={rStyles.tableRow}>
-                        <Text style={[rStyles.td, { flex: 1.6 }]}>{it.service_name}</Text>
-                        <Text style={[rStyles.td, rStyles.tRight, rStyles.figure]}>{it.quantity}</Text>
-                        <Text style={[rStyles.tdBold, rStyles.tRight, rStyles.figure, { flex: 1 }]}>
-                          {peso(Number(it.subtotal))}
-                        </Text>
-                      </View>
-                    ))
-                  )}
-                </View>
-
-                <View style={rStyles.totals}>
-                  <View style={rStyles.totalRow}>
-                    <Text style={rStyles.totalLabel}>Subtotal</Text>
-                    <Text style={[rStyles.totalValue, rStyles.figure]}>{peso(invoice.total)}</Text>
-                  </View>
-                  <View style={rStyles.grandRow}>
-                    <Text style={rStyles.grandLabel}>Total paid</Text>
-                    <Text style={[rStyles.grandValue, rStyles.figure]}>{peso(invoice.total)}</Text>
-                  </View>
-                </View>
-
-                {payments.length > 0 && (
-                  <View style={rStyles.payments}>
-                    <Text style={rStyles.metaLabel}>Payments received</Text>
-                    {payments.map((p) => (
-                      <View key={p.id} style={rStyles.paymentRow}>
-                        <Text style={rStyles.paymentLine} numberOfLines={1}>
-                          {fmtPastDate(p.paid_at)} — Paid at the clinic
-                          {p.method ? ` (${p.method})` : ''}
-                        </Text>
-                        <Text style={[rStyles.paymentAmount, rStyles.figure]}>{peso(Number(p.amount))}</Text>
-                      </View>
-                    ))}
-                  </View>
-                )}
-              </>
-            )}
           </ScrollView>
 
-          {/* Outside the ScrollView so it stays put while the receipt
-              scrolls underneath it. */}
-          <TouchableOpacity
-            style={rStyles.closeBtn}
+          {/* Outside the ScrollView so they stay put while the receipt
+              scrolls underneath. */}
+          <Pressable
+            style={styles.closeBtn}
             onPress={onClose}
             hitSlop={hitSlop}
             accessibilityRole="button"
             accessibilityLabel="Close receipt"
           >
-            <X size={sz(16)} color={colors.mutedFg} />
-          </TouchableOpacity>
+            <X size={sz(18)} color={colors.foreground} />
+          </Pressable>
+
+          <Pressable
+            style={({ pressed }) => [styles.doneBtn, pressed && styles.doneBtnPressed]}
+            onPress={onClose}
+            accessibilityRole="button"
+          >
+            <Text style={styles.doneText}>Done</Text>
+          </Pressable>
         </View>
       </View>
     </Modal>
@@ -190,119 +206,135 @@ export function ReceiptModal({
 }
 
 /* ── Receipt styles ──
-   A separate sheet, kept apart from the card-list styles above the
-   same way InvoiceDetail's styling was its own thing in the admin —
-   this is meant to read as a document, not another app screen.
+   Every text style carries a font from the theme. A style with a
+   fontSize but no fontFamily silently falls back to the system font.
+   Figures use tabular numerals so amounts line up in their column.
 
-   Every text style here carries a font from the theme. A style with a
-   fontSize but no fontFamily silently falls back to the system font,
-   which is what made the receipt look like a different app. Figures
-   use tabular numerals so amounts line up in their column. */
-const rStyles = StyleSheet.create({
+   The sheet is capped in width, so on a tablet it stays a readable
+   column in the centre; on a phone it fills the width. Its height is
+   capped at 92% of the screen and only the middle scrolls, which keeps
+   the Done button reachable on a small phone or with large text. */
+const styles = StyleSheet.create({
   backdrop: {
     flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: space.lg,
+    justifyContent: 'flex-end',
     backgroundColor: colors.overlay,
   },
   sheet: {
     width: '100%',
-    maxWidth: sz(420),
-    maxHeight: '86%',
+    maxWidth: 560,
+    maxHeight: '92%',
+    alignSelf: 'center',
+    backgroundColor: colors.card,
+    borderTopLeftRadius: 28,
+    borderTopRightRadius: 28,
+    borderWidth: 1,
+    borderBottomWidth: 0,
+    borderColor: colors.cardBorder,
+    paddingTop: space.sm,
   },
-  paper: {
-    backgroundColor: colors.white,
-    borderRadius: radius.sm,
+  handle: {
+    alignSelf: 'center',
+    width: 40,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: colors.input,
   },
-  paperContent: {
-    padding: space.xl,
-    paddingTop: space.xxl,
+  scroll: { flexShrink: 1 },
+  scrollContent: {
+    paddingHorizontal: space.xl,
+    paddingTop: space.lg,
+    paddingBottom: space.lg,
   },
   closeBtn: {
     position: 'absolute',
-    top: space.sm,
-    right: space.sm,
-    width: sz(30),
-    height: sz(30),
-    borderRadius: 15,
+    top: space.md,
+    right: space.lg,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
     backgroundColor: colors.muted,
     alignItems: 'center',
     justifyContent: 'center',
   },
   figure: { fontVariant: ['tabular-nums'] },
 
-  stamp: {
-    alignSelf: 'center',
-    marginBottom: space.md,
-    paddingHorizontal: space.xl,
-    paddingVertical: space.md,
-    borderWidth: 3,
-    borderColor: status.success.fg,
-    borderRadius: 4,
-    opacity: 0.8,
-    transform: [{ rotate: '-8deg' }],
-  },
-  stampText: {
-    fontFamily: fonts.bodyBold,
-    fontSize: sz(20),
-    lineHeight: sz(24),
-    letterSpacing: 3,
-    color: status.success.fg,
-    textAlign: 'center',
-  },
-  stampDate: {
-    ...text.caption,
-    marginTop: 2,
-    letterSpacing: 1,
-    color: status.success.fg,
-    textAlign: 'center',
-  },
-
-  letterhead: { alignItems: 'center' },
+  letterhead: { paddingRight: 52 },
   clinicName: {
-    ...text.title,
-    fontSize: sz(18),
-    lineHeight: sz(23),
-    letterSpacing: -0.3,
+    ...text.heading,
+    fontSize: sz(16),
+    lineHeight: sz(21),
     color: colors.foreground,
-    textAlign: 'center',
   },
-  clinicMeta: {
-    ...text.caption,
-    marginTop: 4,
-    color: colors.mutedFg,
-    textAlign: 'center',
-  },
-  rule: {
-    height: 1,
-    backgroundColor: colors.border,
-    marginTop: space.lg,
-  },
+  clinicMeta: { ...text.caption, marginTop: 4, color: colors.mutedFg },
 
-  metaRow: { flexDirection: 'row', marginTop: space.lg },
-  metaLabel: { ...text.eyebrow, color: colors.mutedFg },
-  metaValue: { ...text.smallBold, marginTop: 4, color: colors.foreground },
-  metaSub: { ...text.caption, marginTop: 2, color: colors.mutedFg },
-
-  table: { marginTop: space.xl },
-  tableHeadRow: {
-    flexDirection: 'row',
-    borderBottomWidth: 1.5,
-    borderBottomColor: colors.foreground,
-    paddingBottom: 7,
+  amountLabel: { ...text.small, color: colors.mutedFg, marginTop: space.xl },
+  amount: {
+    fontFamily: fonts.bodyBold,
+    fontSize: sz(40),
+    lineHeight: sz(46),
+    letterSpacing: -0.8,
+    color: colors.foreground,
+    fontVariant: ['tabular-nums'],
+    marginTop: 2,
   },
-  th: { ...text.eyebrow, color: colors.mutedFg, flex: 0.6 },
-  tRight: { textAlign: 'right' },
-  tableRow: {
+  paidBadge: {
+    alignSelf: 'flex-start',
     flexDirection: 'row',
     alignItems: 'center',
+    gap: 6,
+    marginTop: space.sm,
+    backgroundColor: status.success.bg,
+    borderRadius: radius.pill,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+  },
+  paidBadgeText: { fontFamily: fonts.bodyBold, fontSize: sz(13), lineHeight: sz(18), color: status.success.fg },
+
+  rule: { height: 1, backgroundColor: colors.border, marginTop: space.lg, marginBottom: space.xs },
+
+  kvRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    gap: space.lg,
+    paddingVertical: 7,
+  },
+  kvLabel: { ...text.small, color: colors.mutedFg, flexShrink: 0 },
+  kvValue: { ...text.smallBold, color: colors.foreground, flexShrink: 1, textAlign: 'right' },
+
+  /* The items sit in an inset panel, so they read as the "document"
+     part of the receipt. */
+  panel: {
+    marginTop: space.lg,
+    backgroundColor: colors.background,
+    borderRadius: radius.lg,
+    paddingHorizontal: space.lg,
+    paddingBottom: space.xs,
+  },
+  tableHeadRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: space.md,
+    paddingVertical: space.md,
     borderBottomWidth: 1,
     borderBottomColor: colors.border,
-    paddingVertical: 9,
   },
-  td: { ...text.small, color: colors.foreground, flex: 0.6 },
-  tdBold: { ...text.smallBold, color: colors.foreground, flex: 0.6 },
+  th: { ...text.caption, fontFamily: fonts.bodyBold, color: colors.mutedFg },
+  colItem: { flex: 1, minWidth: 0 },
+  colQty: { width: sz(32), textAlign: 'center' },
+  colAmount: { minWidth: sz(76), textAlign: 'right' },
+  tableRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: space.md,
+    paddingVertical: space.md,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border,
+  },
+  td: { ...text.small, color: colors.foreground },
+  tdBold: { ...text.smallBold, color: colors.foreground },
+  loadingBlock: { paddingVertical: space.lg },
   noItems: {
     ...text.caption,
     paddingVertical: space.xl,
@@ -310,34 +342,27 @@ const rStyles = StyleSheet.create({
     color: colors.mutedFg,
   },
 
-  totals: { marginTop: space.md, gap: 6 },
-  totalRow: { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 2 },
-  totalLabel: { ...text.small, color: colors.mutedFg },
-  totalValue: { ...text.small, color: colors.foreground },
   grandRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    borderTopWidth: 1.5,
-    borderTopColor: colors.foreground,
-    paddingTop: 8,
-    marginTop: 4,
+    gap: space.md,
+    paddingVertical: space.md,
   },
   grandLabel: { ...text.bodyBold, color: colors.foreground },
   grandValue: { ...text.bodyBold, fontSize: sz(18), lineHeight: sz(24), color: colors.foreground },
 
-  payments: {
-    marginTop: space.xl,
-    borderTopWidth: 1,
-    borderTopColor: colors.border,
-    paddingTop: space.md,
-    gap: 6,
+  doneBtn: {
+    ...{
+      height: sz(52),
+      borderRadius: radius.lg,
+      backgroundColor: colors.primary,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    marginHorizontal: space.xl,
+    marginTop: space.sm,
   },
-  paymentRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    gap: space.md,
-  },
-  paymentLine: { ...text.caption, color: colors.mutedFg, flex: 1 },
-  paymentAmount: { ...text.caption, fontFamily: fonts.bodyBold, color: colors.foreground },
+  doneBtnPressed: { backgroundColor: colors.primaryDark },
+  doneText: { ...text.bodyBold, color: colors.primaryFg },
 });

@@ -93,7 +93,11 @@ export default function NotificationsScreen() {
   };
 
   const fetchNotifications = async () => {
-    const { data: { user } } = await supabase.auth.getUser();
+    // getSession reads the login saved on the phone. getUser() asks the
+    // server every time, which added a full round trip before the list
+    // was even requested.
+    const { data: { session } } = await supabase.auth.getSession();
+    const user = session?.user;
     if (!user) return;
 
     const { data } = await (supabase as any)
@@ -114,21 +118,55 @@ export default function NotificationsScreen() {
 
   useFocusEffect(useCallback(() => { fetchNotifications(); }, []));
 
-  // Live updates: refetch whenever one of this client's rows changes.
+  /* One change from the server, applied to the list straight away.
+     The event already carries the whole row, so there is nothing to
+     fetch: a new notification shows up the moment it arrives. */
+  const applyChange = (payload: any) => {
+    if (payload.eventType === 'DELETE') {
+      const id = payload.old?.id;
+      if (id) setNotifications(prev => prev.filter(n => n.id !== id));
+      return;
+    }
+
+    const row = payload.new as AppNotification | undefined;
+    if (!row) return;
+    if (row.id === pending.current?.item.id) return; // waiting to be deleted
+    if ((row as any).type !== 'appointment') return; // this screen lists visit updates only
+
+    setNotifications(prev => {
+      const exists = prev.some(n => n.id === row.id);
+      const next = exists
+        ? prev.map(n => (n.id === row.id ? { ...n, ...row } : n))
+        : [row, ...prev];
+      return next.sort(
+        (a, b) => parseDate(b.created_at).getTime() - parseDate(a.created_at).getTime(),
+      );
+    });
+  };
+
+  // Live updates for this client's notifications.
   useEffect(() => {
     let active = true;
     let channel: any;
+    let firstConnect = true;
     (async () => {
-      const { data: { user } } = await supabase.auth.getUser();
+      const { data: { session } } = await supabase.auth.getSession();
+      const user = session?.user;
       if (!user || !active) return;
       channel = (supabase as any)
         .channel(`notifications-${user.id}`)
         .on(
           'postgres_changes',
           { event: '*', schema: 'public', table: 'notifications', filter: `client_user_id=eq.${user.id}` },
-          () => fetchNotifications(),
+          applyChange,
         )
-        .subscribe();
+        .subscribe((status: string) => {
+          if (status !== 'SUBSCRIBED') return;
+          // After a dropped connection, catch up on anything missed.
+          // The first connect needs no fetch: the screen just loaded.
+          if (!firstConnect) fetchNotifications();
+          firstConnect = false;
+        });
     })();
     return () => {
       active = false;

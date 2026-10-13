@@ -8,7 +8,9 @@ import {
   TextInput,
   ActivityIndicator,
   Alert,
+  Keyboard,
   KeyboardAvoidingView,
+  LayoutAnimation,
   Platform,
   StatusBar,
   type TextInputProps,
@@ -23,12 +25,14 @@ import {
   Eye,
   EyeOff,
   ShieldCheck,
+  ChevronLeft,
 } from 'lucide-react-native';
 import { supabase } from '../../lib/supabase';
 import { passwordProblem } from '../../lib/passwordPolicy';
-import { colors, status, text, space, radius, shadow, common, hitSlop } from '../../constants/theme';
+import { colors, status, text, fonts, space, radius, shadow, common, hitSlop } from '../../constants/theme';
 import { Skeleton } from '../../components/Skeleton';
-import { ScreenHeader } from '../../components/ScreenHeader';
+import FloatField from '../../components/FloatField';
+import { BUTTON_H } from '../../components/AuthShell';
 
 /* The rules shown under "New password". They mirror lib/passwordPolicy.ts
    (12+ characters, upper, lower, number, symbol). This list only gives
@@ -42,76 +46,74 @@ const PASSWORD_RULES: { label: string; test: (v: string) => boolean }[] = [
   { label: 'A symbol', test: (v) => /[^A-Za-z0-9]/.test(v) },
 ];
 
-/* One password field, used three times. It owns its own show/hide and
-   focus state, so the screen only has to care about the values. */
+/* One password field, used three times. It uses the same floating-label
+   FloatField as the sign-in screen, and owns its own show/hide and focus
+   state, so the screen only has to care about the values. */
 function PasswordField({
   label,
   value,
   onChangeText,
-  placeholder,
-  hint,
   autoComplete,
   textContentType,
   inputRef,
   returnKeyType,
   onSubmitEditing,
+  onFocus,
 }: {
   label: string;
   value: string;
   onChangeText: (v: string) => void;
-  placeholder: string;
-  hint?: string;
   autoComplete: TextInputProps['autoComplete'];
   textContentType: TextInputProps['textContentType'];
   inputRef?: RefObject<TextInput | null>;
   returnKeyType: TextInputProps['returnKeyType'];
   onSubmitEditing: () => void;
+  onFocus?: () => void;
 }) {
   const [show, setShow] = useState(false);
   const [focused, setFocused] = useState(false);
 
   return (
-    <View>
-      <Text style={styles.label}>{label}</Text>
-      <View style={[styles.inputWrap, focused && styles.inputWrapFocused]}>
-        <TextInput
-          ref={inputRef}
-          style={styles.input}
-          placeholder={placeholder}
-          placeholderTextColor={colors.mutedFg}
-          secureTextEntry={!show}
-          value={value}
-          onChangeText={onChangeText}
-          onFocus={() => setFocused(true)}
-          onBlur={() => setFocused(false)}
-          autoCapitalize="none"
-          autoCorrect={false}
-          autoComplete={autoComplete}
-          textContentType={textContentType}
-          returnKeyType={returnKeyType}
-          blurOnSubmit={returnKeyType !== 'next'}
-          onSubmitEditing={onSubmitEditing}
-        />
+    <FloatField
+      label={label}
+      value={value}
+      focused={focused}
+      inputRef={inputRef}
+      onChangeText={onChangeText}
+      onFocus={() => {
+        setFocused(true);
+        onFocus?.();
+      }}
+      onBlur={() => setFocused(false)}
+      secureTextEntry={!show}
+      autoCapitalize="none"
+      autoCorrect={false}
+      autoComplete={autoComplete}
+      textContentType={textContentType}
+      returnKeyType={returnKeyType}
+      blurOnSubmit={returnKeyType !== 'next'}
+      onSubmitEditing={onSubmitEditing}
+      right={
         <TouchableOpacity
+          style={styles.eyeBtn}
           onPress={() => setShow((v) => !v)}
           activeOpacity={0.7}
-          hitSlop={hitSlop}
           accessibilityRole="button"
           accessibilityLabel={show ? `Hide ${label.toLowerCase()}` : `Show ${label.toLowerCase()}`}
         >
           {show
-            ? <EyeOff size={18} color={colors.mutedFg} />
-            : <Eye size={18} color={colors.mutedFg} />}
+            ? <EyeOff size={20} color={colors.mutedFg} />
+            : <Eye size={20} color={colors.mutedFg} />}
         </TouchableOpacity>
-      </View>
-      {hint ? <Text style={styles.hint}>{hint}</Text> : null}
-    </View>
+      }
+    />
   );
 }
 
 export default function SecurityScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
+  const statusBarHeight = Math.max(insets.top, StatusBar.currentHeight ?? 0);
 
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
@@ -125,6 +127,44 @@ export default function SecurityScreen() {
 
   const newRef = useRef<TextInput>(null);
   const confirmRef = useRef<TextInput>(null);
+
+  /* ── Keyboard handling (same approach as the sign-in screen) ──
+     On edge-to-edge Android the window doesn't shrink for the keyboard, so
+     we measure how much of this screen the keyboard covers and add that as
+     bottom padding. The form can then scroll clear of it. */
+  const rootRef = useRef<View>(null);
+  const scrollRef = useRef<ScrollView>(null);
+  const [kbPad, setKbPad] = useState(0);
+  // While the keyboard is up the screen goes compact (smaller header, no
+  // subtitle, tighter spacing) so the whole form and the button fit above it.
+  const [kbOpen, setKbOpen] = useState(false);
+  // Only let the screen scroll when the content really is taller than it.
+  const [viewH, setViewH] = useState(0);
+  const [contentH, setContentH] = useState(0);
+
+  const scrollToBottomSoon = (ms = 150) => {
+    setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), ms);
+  };
+
+  useEffect(() => {
+    const show = Keyboard.addListener('keyboardDidShow', (e) => {
+      LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+      setKbOpen(true);
+      rootRef.current?.measureInWindow((_x, y, _w, h) => {
+        setKbPad(Math.max(0, y + h - e.endCoordinates.screenY));
+        setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 80);
+      });
+    });
+    const hide = Keyboard.addListener('keyboardDidHide', () => {
+      LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+      setKbOpen(false);
+      setKbPad(0);
+    });
+    return () => {
+      show.remove();
+      hide.remove();
+    };
+  }, []);
 
   useEffect(() => {
     supabase.auth.getUser()
@@ -233,27 +273,52 @@ export default function SecurityScreen() {
   };
 
   return (
-    <View style={styles.container}>
+    <View ref={rootRef} collapsable={false} style={styles.container}>
       <StatusBar barStyle="dark-content" backgroundColor={colors.background} />
 
-      <ScreenHeader title="Security" onBack={goBack} large />
+      {/* Same back button as the sign-in screen: a plain chevron, no circle. */}
+      <View style={[styles.header, { paddingTop: statusBarHeight + space.sm }]}>
+        <TouchableOpacity
+          style={styles.backBtn}
+          onPress={goBack}
+          activeOpacity={0.7}
+          hitSlop={hitSlop}
+          accessibilityRole="button"
+          accessibilityLabel="Go back"
+        >
+          <ChevronLeft size={28} color={colors.primary} strokeWidth={2.2} />
+        </TouchableOpacity>
+        <Text style={styles.sectionTitle} accessibilityRole="header">
+          Change password
+        </Text>
+      </View>
 
       <KeyboardAvoidingView
         style={styles.flex}
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       >
         <ScrollView
+          ref={scrollRef}
           style={styles.flex}
-          contentContainerStyle={[styles.form, { paddingBottom: insets.bottom + space.xxxl }]}
+          contentContainerStyle={[
+            styles.form,
+            { paddingBottom: insets.bottom + (kbOpen ? space.lg : space.xxxl) + kbPad },
+          ]}
           keyboardShouldPersistTaps="handled"
           showsVerticalScrollIndicator={false}
+          bounces={false}
+          overScrollMode="never"
+          scrollEnabled={contentH > viewH + 1}
+          onLayout={(e) => setViewH(e.nativeEvent.layout.height)}
+          onContentSizeChange={(_, h) => setContentH(h)}
         >
           {usesPassword === null ? (
             <SecuritySkeleton />
           ) : usesPassword ? (
             <>
-              <Text style={styles.sectionTitle}>Change password</Text>
-              <Text style={styles.sectionSub}>Use a strong password you do not use elsewhere.</Text>
+              {!kbOpen && (
+                <Text style={styles.sectionSub}>Use a strong password you do not use elsewhere.</Text>
+              )}
 
               {error ? (
                 <View style={styles.errorBox} accessibilityLiveRegion="polite">
@@ -262,12 +327,11 @@ export default function SecurityScreen() {
                 </View>
               ) : null}
 
-              <View style={styles.card}>
+              <View style={[styles.fields, kbOpen && styles.fieldsCompact]}>
                 <PasswordField
                   label="Current password"
                   value={currentPassword}
                   onChangeText={edit(setCurrentPassword)}
-                  placeholder="Enter current password"
                   autoComplete="current-password"
                   textContentType="password"
                   returnKeyType="next"
@@ -279,17 +343,17 @@ export default function SecurityScreen() {
                     label="New password"
                     value={newPassword}
                     onChangeText={edit(setNewPassword)}
-                    placeholder="Enter new password"
                     autoComplete="new-password"
                     textContentType="newPassword"
                     inputRef={newRef}
                     returnKeyType="next"
                     onSubmitEditing={() => confirmRef.current?.focus()}
+                    onFocus={() => scrollToBottomSoon()}
                   />
 
                   {/* Ticks off as the person types. Icon and colour both
                       change, so it doesn't rely on colour alone. */}
-                  <View style={styles.rules}>
+                  <View style={[styles.rules, kbOpen && styles.rulesCompact]}>
                     {PASSWORD_RULES.map((rule) => {
                       const met = rule.test(newPassword);
                       return (
@@ -316,12 +380,12 @@ export default function SecurityScreen() {
                     label="Confirm new password"
                     value={confirmPassword}
                     onChangeText={edit(setConfirmPassword)}
-                    placeholder="Re-enter new password"
                     autoComplete="new-password"
                     textContentType="newPassword"
                     inputRef={confirmRef}
                     returnKeyType="go"
                     onSubmitEditing={handleChangePassword}
+                    onFocus={() => scrollToBottomSoon()}
                   />
 
                   {passwordsMatch && (
@@ -346,6 +410,7 @@ export default function SecurityScreen() {
               <TouchableOpacity
                 style={[
                   styles.saveBtn,
+                  kbOpen && styles.saveBtnCompact,
                   !canSubmit && !saving && common.buttonPrimaryDisabled,
                   saving && styles.saveBtnBusy,
                 ]}
@@ -359,15 +424,9 @@ export default function SecurityScreen() {
                 {saving ? (
                   <ActivityIndicator color={colors.primaryFg} />
                 ) : (
-                  <>
-                    <ShieldCheck
-                      size={17}
-                      color={canSubmit ? colors.primaryFg : colors.mutedFg}
-                    />
-                    <Text style={[styles.saveBtnText, !canSubmit && common.buttonPrimaryTextDisabled]}>
-                      Update password
-                    </Text>
-                  </>
+                  <Text style={[styles.saveBtnText, !canSubmit && common.buttonPrimaryTextDisabled]}>
+                    Update password
+                  </Text>
                 )}
               </TouchableOpacity>
             </>
@@ -394,11 +453,23 @@ const styles = StyleSheet.create({
   container: { ...common.screen },
   flex: { flex: 1 },
 
-  form: { padding: space.xl },
+  form: { paddingHorizontal: space.xxl, paddingTop: space.lg },
   loader: { marginTop: space.xxxl },
 
-  sectionTitle: { ...text.heading, color: colors.foreground, marginBottom: space.xs },
-  sectionSub: { ...text.small, color: colors.mutedFg, marginBottom: space.lg },
+  /* Same title style as "Welcome back" on the sign-in screen. */
+  sectionTitle: {
+    fontFamily: fonts.display,
+    fontSize: 28,
+    lineHeight: 34,
+    letterSpacing: -0.5,
+    color: colors.foreground,
+  },
+  sectionSub: {
+    ...text.body,
+    color: colors.mutedFg,
+    marginTop: space.sm,
+    marginBottom: space.xl,
+  },
 
   errorBox: {
     flexDirection: 'row',
@@ -413,25 +484,33 @@ const styles = StyleSheet.create({
   },
   errorText: { ...text.small, color: status.danger.fg, flex: 1 },
 
-  card: { ...common.card, gap: space.lg },
+  /* No card around the fields: they sit straight on the background,
+     like the sign-in form. */
+  fields: { gap: space.md },
+  fieldsCompact: { gap: space.sm },
 
-  label: { ...common.label },
-  inputWrap: {
+  header: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: space.sm,
-    height: 52,
-    backgroundColor: colors.white,
-    borderWidth: 1.5,
-    borderColor: colors.input,
-    borderRadius: radius.md,
+    gap: space.xs,
     paddingHorizontal: space.lg,
   },
-  inputWrapFocused: { borderColor: colors.primary },
-  input: { flex: 1, ...text.body, color: colors.foreground, padding: 0 },
-  hint: { ...text.caption, color: colors.mutedFg, marginTop: space.xs },
+  backBtn: {
+    width: BUTTON_H,
+    height: BUTTON_H,
+    justifyContent: 'center',
+    alignItems: 'flex-start',
+  },
+
+  eyeBtn: {
+    width: BUTTON_H,
+    height: BUTTON_H,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
 
   rules: { gap: 6, marginTop: space.md },
+  rulesCompact: { gap: 4, marginTop: space.sm },
   ruleRow: { flexDirection: 'row', alignItems: 'center', gap: space.sm },
   ruleText: { ...text.caption, color: colors.mutedFg },
   ruleTextMet: { color: colors.primary },
@@ -445,11 +524,16 @@ const styles = StyleSheet.create({
   matchText: { ...text.caption, fontFamily: text.bodyBold.fontFamily },
 
   saveBtn: {
-    ...common.buttonPrimary,
+    height: BUTTON_H,
+    borderRadius: BUTTON_H / 2,
+    backgroundColor: colors.primary,
+    alignItems: 'center',
+    justifyContent: 'center',
     marginTop: space.xl,
     ...shadow.primary,
   },
   saveBtnBusy: { opacity: 0.75 },
+  saveBtnCompact: { marginTop: space.lg },
   saveBtnText: { ...common.buttonPrimaryText },
 
   /* Same card and beige icon circle as the Profile tiles. */
@@ -481,15 +565,14 @@ function SecuritySkeleton() {
     <View accessibilityLabel="Loading" accessibilityLiveRegion="polite">
       <Skeleton width={140} height={16} />
       <Skeleton width="70%" height={12} style={{ marginTop: space.sm, marginBottom: space.lg }} />
-      <View style={styles.card}>
+      <View style={styles.fields}>
         {[0, 1, 2].map((i) => (
           <View key={i}>
-            <Skeleton width={110} height={12} style={{ marginBottom: space.sm }} />
-            <Skeleton width="100%" height={52} radius={radius.md} />
+            <Skeleton width="100%" height={BUTTON_H + 4} radius={radius.md} />
           </View>
         ))}
       </View>
-      <Skeleton width="100%" height={52} radius={radius.lg} style={{ marginTop: space.xl }} />
+      <Skeleton width="100%" height={BUTTON_H} radius={BUTTON_H / 2} style={{ marginTop: space.xl }} />
     </View>
   );
 }

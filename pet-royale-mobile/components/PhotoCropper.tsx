@@ -14,12 +14,18 @@ import {
 import { GestureDetector, Gesture, GestureHandlerRootView } from 'react-native-gesture-handler';
 import Animated, { useSharedValue, useAnimatedStyle } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import Svg, { Path, Circle } from 'react-native-svg';
 import * as ImageManipulator from 'expo-image-manipulator';
 import { colors, text, space, fonts, sz } from '../constants/theme';
 
 const MAX_ZOOM = 4;
 const OUTPUT_SIZE = 800;
 
+/* How much of the photo outside the circle is hidden. 1 = fully hidden, so
+   the screen is one clean navy and only the circle shows the photo. Lower
+   it (e.g. 0.8) to let the photo faintly show through; the edges of the
+   photo's rectangle will show again, so 1 is the cleanest look. */
+const MASK_OPACITY = 1;
 
 type Source = { uri: string; width: number; height: number };
 
@@ -147,7 +153,15 @@ function CropperBody({
     }
   };
 
-  const HOLE_BORDER = STAGE;
+  /* The dim layer: one rectangle the size of the stage with a circle cut
+     out of it (even-odd fill). This draws the same on every device, unlike
+     a View with a huge borderWidth, which Android can render badly. */
+  const cx = STAGE / 2;
+  const cy = STAGE / 2;
+  const r = CROP / 2;
+  const maskPath =
+    `M0 0H${STAGE}V${STAGE}H0Z ` +
+    `M${cx - r} ${cy}a${r} ${r} 0 1 0 ${2 * r} 0a${r} ${r} 0 1 0 ${-2 * r} 0Z`;
 
   return (
     <View style={styles.root}>
@@ -182,28 +196,27 @@ function CropperBody({
           </View>
         </GestureDetector>
 
-        <View
+        <Svg
+          width={STAGE}
+          height={STAGE}
           pointerEvents="none"
-          style={{
-            position: 'absolute',
-            width: CROP + HOLE_BORDER * 2,
-            height: CROP + HOLE_BORDER * 2,
-            borderRadius: (CROP + HOLE_BORDER * 2) / 2,
-            borderWidth: HOLE_BORDER,
-            borderColor: 'rgba(4, 22, 47, 0.72)',
-          }}
-        />
-        <View
-          pointerEvents="none"
-          style={{
-            position: 'absolute',
-            width: CROP,
-            height: CROP,
-            borderRadius: CROP / 2,
-            borderWidth: 2,
-            borderColor: colors.primaryFg,
-          }}
-        />
+          style={StyleSheet.absoluteFill}
+        >
+          <Path
+            d={maskPath}
+            fill={colors.primaryDark}
+            fillOpacity={MASK_OPACITY}
+            fillRule="evenodd"
+          />
+          <Circle
+            cx={cx}
+            cy={cy}
+            r={r - 1}
+            stroke={colors.primaryFg}
+            strokeWidth={2}
+            fill="none"
+          />
+        </Svg>
       </View>
 
       <Text style={styles.hint}>Drag to reposition. Pinch to zoom.</Text>
@@ -228,6 +241,7 @@ const styles = StyleSheet.create({
   stage: {
     marginTop: space.xxl,
     overflow: 'hidden',
+    backgroundColor: colors.primaryDark,
     alignItems: 'center',
     justifyContent: 'center',
   },

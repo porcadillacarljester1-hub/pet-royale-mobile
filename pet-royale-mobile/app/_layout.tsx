@@ -1,7 +1,7 @@
 import '../lib/ignoreDevWarnings';
 import '../lib/reanimatedLogger';
 import { useEffect, useRef, useState } from 'react';
-import { LogBox, Platform, StyleSheet } from 'react-native';
+import { LogBox, Platform, StyleSheet, View } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { Stack, useRouter, useRootNavigationState } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
@@ -22,6 +22,7 @@ import { syncProviderAvatar } from '../lib/avatarHistory';
 import { colors } from '../constants/theme';
 import '../lib/capFontScale';
 import { hasSeenIntro } from '../utils/firstLaunch';
+import LoadingScreen from '../components/LoadingScreen';
 
 if (Platform.OS === 'web' && typeof document !== 'undefined') {
   const style = document.createElement('style');
@@ -45,6 +46,13 @@ LogBox.ignoreLogs([
    forever. */
 const SPLASH_TIMEOUT_MS = 8000;
 
+/* Keep the loading screen up at least this long, even when everything is
+   ready sooner, so the animation is actually seen. */
+const MIN_LOADING_MS = 1500;
+
+/* After this long still waiting, tell the person the connection is slow. */
+const SLOW_MS = 5000;
+
 export default function RootLayout() {
   const router = useRouter();
   const navigationState = useRootNavigationState();
@@ -54,6 +62,23 @@ export default function RootLayout() {
   // True once the first destination has been chosen and navigated to.
   const [routed, setRouted] = useState(false);
   const startedRouting = useRef(false);
+
+  // True once the loading screen has been shown for its minimum time.
+  const [minElapsed, setMinElapsed] = useState(false);
+  useEffect(() => {
+    const t = setTimeout(() => setMinElapsed(true), MIN_LOADING_MS);
+    return () => clearTimeout(t);
+  }, []);
+
+  // Real startup progress: 0 = nothing yet, 1 = session checked,
+  // 2 = account/profile checked.
+  const [loadStep, setLoadStep] = useState(0);
+  // Flips on if startup is taking a while (slow or no internet).
+  const [slow, setSlow] = useState(false);
+  useEffect(() => {
+    const t = setTimeout(() => setSlow(true), SLOW_MS);
+    return () => clearTimeout(t);
+  }, []);
 
   const [fontsLoaded, fontError] = useFonts({
     'Ionicons': require('../assets/Ionicons.ttf'),
@@ -81,12 +106,12 @@ export default function RootLayout() {
 
      Navigating before the navigator has mounted throws, so this waits
      for the navigation state instead of firing on first render (the
-     layout renders nothing until fonts are ready, so on a cold start
-     the navigator doesn't exist yet).
+     Stack only renders once fonts are ready, so on a cold start the
+     navigator doesn't exist yet).
 
-     The splash stays up until this finishes, so the first thing shown
-     after it is the right screen — not the welcome page for a moment
-     followed by a jump to home. */
+     The loading screen stays up until this finishes, so the first thing
+     shown after it is the right screen — not the welcome page for a
+     moment followed by a jump to home. */
   useEffect(() => {
     if (!navigationReady || startedRouting.current) return;
     startedRouting.current = true;
@@ -99,6 +124,7 @@ export default function RootLayout() {
       try {
         const { data: { session: current } } = await supabase.auth.getSession();
         setSession(current);
+        setLoadStep((s) => Math.max(s, 1));
 
         if (current) {
           destination = '/(tabs)/home';
@@ -127,6 +153,7 @@ export default function RootLayout() {
         destination = '/';
       }
 
+      setLoadStep(2);
       router.replace(destination as any);
       clearTimeout(timeout);
       setRouted(true);
@@ -134,12 +161,6 @@ export default function RootLayout() {
 
     return () => clearTimeout(timeout);
   }, [navigationReady, router]);
-
-  useEffect(() => {
-    if (fontsReady && routed) {
-      SplashScreen.hideAsync().catch(() => undefined);
-    }
-  }, [fontsReady, routed]);
 
   const userId: string | undefined = session?.user?.id;
 
@@ -168,28 +189,58 @@ export default function RootLayout() {
     });
   }, [userId]);
 
-  if (!fontsReady) return null;
+  // What the loading screen shows, based on what the app is really waiting for.
+  let progress = 0.1;
+  let status = 'Loading fonts…';
+  if (fontsReady) {
+    progress = 0.35;
+    status = 'Starting up…';
+  }
+  if (navigationReady) {
+    progress = 0.5;
+    status = 'Checking your account…';
+  }
+  if (loadStep >= 1) progress = 0.75;
+  if (loadStep >= 2) {
+    progress = 0.95;
+    status = 'Almost there…';
+  }
+  if (routed) progress = 1;
+  if (slow && !routed) status = 'Slow connection…';
 
   return (
     <KeyboardProvider statusBarTranslucent navigationBarTranslucent>
       <GestureHandlerRootView style={styles.root}>
-        <Stack
-          screenOptions={{
-            headerShown: false,
-            // Cream behind every screen, so a transition never flashes white.
-            contentStyle: { backgroundColor: colors.background },
-          }}
-        >
-          <Stack.Screen name="index" />
-          <Stack.Screen name="intro" />
-          <Stack.Screen name="signin"/>
-          <Stack.Screen name="forgot-password" options={{ animation: 'none', }}/>
-          <Stack.Screen name="register" />
-          <Stack.Screen name="complete-profile" />
-          <Stack.Screen name="services" />
-          <Stack.Screen name="profile-photo" />
-          <Stack.Screen name="(tabs)" />
-        </Stack>
+        {fontsReady && (
+          <Stack
+            screenOptions={{
+              headerShown: false,
+              // Cream behind every screen, so a transition never flashes white.
+              contentStyle: { backgroundColor: colors.background },
+            }}
+          >
+            <Stack.Screen name="index" />
+            <Stack.Screen name="intro" />
+            <Stack.Screen name="signin" />
+            <Stack.Screen name="forgot-password" options={{ animation: 'none' }} />
+            <Stack.Screen name="register" />
+            <Stack.Screen name="complete-profile" />
+            <Stack.Screen name="services" />
+            <Stack.Screen name="profile-photo" />
+            <Stack.Screen name="(tabs)" />
+          </Stack>
+        )}
+
+        {/* Stays on top until fonts are ready, the first destination is
+            chosen, AND the minimum display time has passed. */}
+        {(!fontsReady || !routed || !minElapsed) && (
+          <View
+            style={StyleSheet.absoluteFill}
+            onLayout={() => SplashScreen.hideAsync().catch(() => undefined)}
+          >
+            <LoadingScreen progress={progress} status={status} />
+          </View>
+        )}
       </GestureHandlerRootView>
     </KeyboardProvider>
   );

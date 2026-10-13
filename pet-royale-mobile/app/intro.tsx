@@ -2,6 +2,8 @@ import React, { useRef, useState } from 'react';
 import {
   View,
   Text,
+  Image,
+  ImageSourcePropType,
   TouchableOpacity,
   StyleSheet,
   FlatList,
@@ -12,9 +14,6 @@ import {
   NativeScrollEvent,
 } from 'react-native';
 import { router } from 'expo-router';
-import {
-  UserPlus, PawPrint, CalendarCheck, ClipboardList, ShoppingBag, Stethoscope,
-} from 'lucide-react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { colors, text, fonts, space } from '../constants/theme';
 import BrandMark from '../components/BrandMark';
@@ -22,15 +21,25 @@ import Rings from '../components/Rings';
 import { markIntroSeen } from '../utils/firstLaunch';
 import { SERVICES } from '../constants/services';
 
-const STEPS = [
-  { Icon: UserPlus, title: 'Create your account', body: 'Sign up with your details so the clinic knows who you are.' },
-  { Icon: PawPrint, title: 'Register your pet', body: "Add your pet's details once, ready for every visit." },
-  { Icon: CalendarCheck, title: 'Book a visit', body: "Send a request for a day and time. We'll send you a notification when the clinic confirms it." },
-  { Icon: ClipboardList, title: 'Track visits and payments', body: 'Get a notification when your visit is completed, and see your appointment and payment history anytime.' },
-  { Icon: ShoppingBag, title: 'Browse pet essentials', body: 'See the products the clinic offers and what is in stock.' },
+/* Pixel art for each slide. Files live in assets/onboarding/ (with @2x and @3x versions beside each one). */
+const ART = {
+  account: require('../assets/onboarding/onboarding-1-create-account.png'),
+  pet: require('../assets/onboarding/onboarding-2-register-pet.png'),
+  visit: require('../assets/onboarding/onboarding-3-book-visit.png'),
+  track: require('../assets/onboarding/onboarding-4-track-payments.png'),
+  shop: require('../assets/onboarding/onboarding-5-pet-essentials.png'),
+  services: require('../assets/onboarding/onboarding-6-clinic-services.png'),
+};
+
+const STEPS: { art: ImageSourcePropType; title: string; body: string }[] = [
+  { art: ART.account, title: 'Create your account', body: 'Sign up with your details so the clinic knows who you are.' },
+  { art: ART.pet, title: 'Register your pet', body: "Add your pet's details once, ready for every visit." },
+  { art: ART.visit, title: 'Book a visit', body: "Send a request for a day and time. We'll send you a notification when the clinic confirms it." },
+  { art: ART.track, title: 'Track visits and payments', body: 'Get a notification when your visit is completed, and see your appointment and payment history anytime.' },
+  { art: ART.shop, title: 'Browse pet essentials', body: 'See the products the clinic offers and what is in stock.' },
 ];
 
-type Slide = { kind: 'step'; Icon: any; title: string; body: string } | { kind: 'services' };
+type Slide = { kind: 'step'; art: ImageSourcePropType; title: string; body: string } | { kind: 'services' };
 const SLIDES: Slide[] = [
   ...STEPS.map((st) => ({ kind: 'step' as const, ...st })),
   { kind: 'services' as const },
@@ -76,11 +85,13 @@ export default function IntroScreen() {
             <View style={{ width, height }}>
               <View style={styles.art}>
                 <Rings style={styles.rings} />
-                <View style={styles.bigHalo}>
-                  <View style={styles.big}>
-                    <item.Icon size={52} color={colors.primary} strokeWidth={1.6} />
-                  </View>
-                </View>
+                <Image
+                  source={item.art}
+                  style={styles.pixel}
+                  resizeMode="contain"
+                  fadeDuration={0}
+                  accessibilityIgnoresInvertColors
+                />
               </View>
               <View style={styles.txt}>
                 <Text style={styles.eyebrow}>
@@ -94,11 +105,13 @@ export default function IntroScreen() {
             <View style={{ width, height }}>
               <View style={[styles.art, styles.artShort]}>
                 <Rings style={styles.rings} />
-                <View style={styles.bigHalo}>
-                  <View style={styles.big}>
-                    <Stethoscope size={52} color={colors.primary} strokeWidth={1.6} />
-                  </View>
-                </View>
+                <Image
+                  source={ART.services}
+                  style={styles.pixel}
+                  resizeMode="contain"
+                  fadeDuration={0}
+                  accessibilityIgnoresInvertColors
+                />
               </View>
               <View style={[styles.txt, styles.txtLong]}>
                 <Text style={styles.eyebrow}>Our services</Text>
@@ -169,24 +182,9 @@ const styles = StyleSheet.create({
     backgroundColor: colors.primary,
   },
   rings: { position: 'absolute', right: -70, top: -60 },
-  bigHalo: {
-    width: 130,
-    height: 130,
-    borderRadius: 44,
-    borderWidth: 1.5,
-    borderColor: 'rgba(221,173,49,0.55)',
-    backgroundColor: 'rgba(255,255,255,0.06)',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  big: {
-    width: 112,
-    height: 112,
-    borderRadius: 36,
-    backgroundColor: colors.muted,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
+  /* Pixel art sits straight on the navy: no tile, no halo.
+     160 x 130 is the image's 1x size (5px per art pixel), so the pixels stay sharp. */
+  pixel: { width: 160, height: 130 },
 
   artShort: { flex: 30 },
   txt: { flex: 48, paddingTop: 26, paddingHorizontal: 24 },

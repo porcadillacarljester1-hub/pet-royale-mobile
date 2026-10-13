@@ -35,6 +35,15 @@ export async function addAvatarHistoryEntry(userId: string, photoUrl: string) {
   if (error) throw error;
 }
 
+export async function deleteAvatarHistoryEntry(userId: string, photoUrl: string) {
+  const { error } = await (supabase as any)
+    .from('user_avatar_history')
+    .delete()
+    .eq('user_id', userId)
+    .eq('photo_url', photoUrl);
+  if (error) throw error;
+}
+
 /**
  * Google accounts expose their profile photo through Auth metadata rather
  * than the clients table. Mirror it into the same history used by custom

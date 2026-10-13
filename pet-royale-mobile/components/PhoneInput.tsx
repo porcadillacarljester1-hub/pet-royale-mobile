@@ -19,14 +19,19 @@ import {
   maxNationalLength,
   sanitizeNational,
 } from '../lib/phone';
+import FloatField from './FloatField';
 
 type Props = {
   iso: string;
   national: string;
   onChangeIso: (iso: string) => void;
   onChangeNational: (digits: string) => void;
-  /** 'pill' = the register screen's rounded field; 'field' = the white form field. */
-  variant?: 'pill' | 'field';
+  /** 'pill' = the register screen's rounded field; 'field' = the white form
+   *  field; 'float' = the country button beside a floating-label number
+   *  field (same as sign-in). */
+  variant?: 'pill' | 'field' | 'float';
+  /** Floating label text, used by the 'float' variant. */
+  label?: string;
   error?: boolean;
   inputRef?: Ref<TextInput>;
   onFocus?: () => void;
@@ -46,6 +51,7 @@ export function PhoneInput({
   onChangeIso,
   onChangeNational,
   variant = 'pill',
+  label = 'Mobile number',
   error = false,
   inputRef,
   onFocus,
@@ -60,6 +66,7 @@ export function PhoneInput({
 
   const country = getCountry(iso);
   const isPill = variant === 'pill';
+  const isFloat = variant === 'float';
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase().replace(/^\+/, '');
@@ -78,53 +85,85 @@ export function PhoneInput({
     setOpen(false);
   };
 
+  const handleFocus = () => {
+    setFocused(true);
+    onFocus?.();
+  };
+  const handleBlur = () => {
+    setFocused(false);
+    onBlur?.();
+  };
+
+  /* The same country button in every variant. In 'float' it gets its own
+     box (the label field sits beside it); in the others it lives inside
+     the shared box. */
+  const countryButton = (
+    <TouchableOpacity
+      style={isFloat ? [styles.countryBox, error && styles.boxError] : styles.countryBtn}
+      onPress={openSheet}
+      disabled={!editable}
+      activeOpacity={0.7}
+      accessibilityRole="button"
+      accessibilityLabel={`Country code, ${country.name} plus ${country.dial}. Tap to change.`}
+    >
+      <Text style={styles.flag}>{flagOf(country.iso)}</Text>
+      <Text style={styles.dial}>+{country.dial}</Text>
+      <ChevronDown size={sz(16)} color={colors.mutedFg} />
+    </TouchableOpacity>
+  );
+
   return (
     <>
-      <View
-        style={[
-          styles.box,
-          isPill ? styles.boxPill : styles.boxField,
-          focused && (isPill ? styles.boxPillFocused : styles.boxFieldFocused),
-          error && styles.boxError,
-        ]}
-      >
-        <TouchableOpacity
-          style={styles.countryBtn}
-          onPress={openSheet}
-          disabled={!editable}
-          activeOpacity={0.7}
-          accessibilityRole="button"
-          accessibilityLabel={`Country code, ${country.name} plus ${country.dial}. Tap to change.`}
+      {isFloat ? (
+        <View style={styles.floatRow}>
+          {countryButton}
+          <View style={styles.floatField}>
+            <FloatField
+              label={label}
+              value={national}
+              focused={focused}
+              inputRef={inputRef}
+              onChangeText={(v) => onChangeNational(sanitizeNational(v, iso))}
+              onFocus={handleFocus}
+              onBlur={handleBlur}
+              keyboardType="phone-pad"
+              autoComplete="tel-national"
+              returnKeyType="next"
+              onSubmitEditing={onSubmitEditing}
+              editable={editable}
+            />
+          </View>
+        </View>
+      ) : (
+        <View
+          style={[
+            styles.box,
+            isPill ? styles.boxPill : styles.boxField,
+            focused && (isPill ? styles.boxPillFocused : styles.boxFieldFocused),
+            error && styles.boxError,
+          ]}
         >
-          <Text style={styles.flag}>{flagOf(country.iso)}</Text>
-          <Text style={styles.dial}>+{country.dial}</Text>
-          <ChevronDown size={sz(16)} color={colors.mutedFg} />
-        </TouchableOpacity>
+          {countryButton}
 
-        <View style={styles.divider} />
+          <View style={styles.divider} />
 
-        <TextInput
-          ref={inputRef}
-          style={styles.input}
-          value={national}
-          onChangeText={(v) => onChangeNational(sanitizeNational(v, iso))}
-          onFocus={() => {
-            setFocused(true);
-            onFocus?.();
-          }}
-          onBlur={() => {
-            setFocused(false);
-            onBlur?.();
-          }}
-          placeholder={iso === 'PH' ? '9XX XXX XXXX' : 'Mobile number'}
-          placeholderTextColor={colors.mutedFg}
-          keyboardType="phone-pad"
-          autoComplete="tel-national"
-          returnKeyType="next"
-          onSubmitEditing={onSubmitEditing}
-          editable={editable}
-        />
-      </View>
+          <TextInput
+            ref={inputRef}
+            style={styles.input}
+            value={national}
+            onChangeText={(v) => onChangeNational(sanitizeNational(v, iso))}
+            onFocus={handleFocus}
+            onBlur={handleBlur}
+            placeholder={iso === 'PH' ? '9XX XXX XXXX' : 'Mobile number'}
+            placeholderTextColor={colors.mutedFg}
+            keyboardType="phone-pad"
+            autoComplete="tel-national"
+            returnKeyType="next"
+            onSubmitEditing={onSubmitEditing}
+            editable={editable}
+          />
+        </View>
+      )}
 
       <Modal visible={open} transparent animationType="slide" onRequestClose={() => setOpen(false)}>
         <View style={styles.modalRoot}>
@@ -221,6 +260,23 @@ const styles = StyleSheet.create({
   },
   boxError: {
     borderColor: colors.destructive,
+  },
+
+  /* 'float' variant: country button in its own box beside the
+     floating-label field. 60 matches FloatField's height; change it if
+     yours differs. */
+  floatRow: { flexDirection: 'row', alignItems: 'stretch', gap: space.sm },
+  floatField: { flex: 1 },
+  countryBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    height: 60,
+    paddingHorizontal: space.md,
+    backgroundColor: colors.card,
+    borderRadius: radius.md,
+    borderWidth: 1.5,
+    borderColor: colors.cardBorder,
   },
 
   countryBtn: {
