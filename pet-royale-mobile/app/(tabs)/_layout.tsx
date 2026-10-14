@@ -1,4 +1,6 @@
+import { useEffect, useState } from 'react';
 import { Tabs } from 'expo-router';
+import { KeyboardEvents } from 'react-native-keyboard-controller';
 import {
   View,
   Text,
@@ -26,6 +28,10 @@ export function useTabBarClearance() {
    action. Personal information (app/account.tsx) is outside this layout,
    so it never had one. Add a route name here to hide the bar on it. */
 const HIDE_TAB_BAR_ON = new Set<string>(['security']);
+
+/* Routes whose bar is hidden only while the keyboard is open. Add a route
+   name here to give another screen the same behavior. */
+const HIDE_TAB_BAR_ON_KEYBOARD = new Set<string>(['products']);
 
 type IoniconName = keyof typeof Ionicons.glyphMap;
 
@@ -82,6 +88,26 @@ function FloatingTabBar({ state, navigation }: BottomTabBarProps) {
   // Must run before the early return below (rules of hooks).
   const insets = useSafeAreaInsets();
 
+  /* The app resizes with the keyboard (KeyboardProvider), which would push
+     this bar up on top of the keys. On the Shop screen only, it is hidden
+     while the keyboard is open (search) and comes back as soon as the
+     keyboard closes. Every other tab behaves exactly as before.
+
+     Both the "Will" and the "Did" events are listened to: some Android
+     devices only report the "Did" ones reliably, and listening to both
+     costs nothing (setting the same value twice does nothing). */
+  const [keyboardOpen, setKeyboardOpen] = useState(false);
+  useEffect(() => {
+    const subs = [
+      KeyboardEvents.addListener('keyboardWillShow', () => setKeyboardOpen(true)),
+      KeyboardEvents.addListener('keyboardDidShow', () => setKeyboardOpen(true)),
+      KeyboardEvents.addListener('keyboardWillHide', () => setKeyboardOpen(false)),
+      KeyboardEvents.addListener('keyboardDidHide', () => setKeyboardOpen(false)),
+    ];
+    return () => subs.forEach((s) => s.remove());
+  }, []);
+
+  if (keyboardOpen && HIDE_TAB_BAR_ON_KEYBOARD.has(state.routes[state.index]?.name)) return null;
   if (HIDE_TAB_BAR_ON.has(state.routes[state.index]?.name)) return null;
 
   return (

@@ -28,9 +28,10 @@ type Props = {
   onChangeNational: (digits: string) => void;
   /** 'pill' = the register screen's rounded field; 'field' = the white form
    *  field; 'float' = the country button beside a floating-label number
-   *  field (same as sign-in). */
-  variant?: 'pill' | 'field' | 'float';
-  /** Floating label text, used by the 'float' variant. */
+   *  field (same as sign-in); 'bar' = the country button and the number
+   *  field as two white pills, like the Pet Essentials search bar. */
+  variant?: 'pill' | 'field' | 'float' | 'bar';
+  /** Label text: the floating label in 'float', the placeholder in 'bar'. */
   label?: string;
   error?: boolean;
   inputRef?: Ref<TextInput>;
@@ -67,6 +68,7 @@ export function PhoneInput({
   const country = getCountry(iso);
   const isPill = variant === 'pill';
   const isFloat = variant === 'float';
+  const isBar = variant === 'bar';
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase().replace(/^\+/, '');
@@ -94,12 +96,18 @@ export function PhoneInput({
     onBlur?.();
   };
 
-  /* The same country button in every variant. In 'float' it gets its own
-     box (the label field sits beside it); in the others it lives inside
-     the shared box. */
+  /* The same country button in every variant. In 'float' and 'bar' it gets
+     its own box (the number field sits beside it); in the others it lives
+     inside the shared box. */
+  const countryButtonStyle = isBar
+    ? [styles.countryPill, error && styles.boxError]
+    : isFloat
+      ? [styles.countryBox, error && styles.boxError]
+      : styles.countryBtn;
+
   const countryButton = (
     <TouchableOpacity
-      style={isFloat ? [styles.countryBox, error && styles.boxError] : styles.countryBtn}
+      style={countryButtonStyle}
       onPress={openSheet}
       disabled={!editable}
       activeOpacity={0.7}
@@ -114,7 +122,36 @@ export function PhoneInput({
 
   return (
     <>
-      {isFloat ? (
+      {isBar ? (
+        <View style={styles.barRow}>
+          {countryButton}
+          <View
+            style={[
+              styles.barField,
+              focused && styles.barFieldFocused,
+              error && styles.boxError,
+            ]}
+          >
+            <TextInput
+              ref={inputRef}
+              style={styles.barInput}
+              value={national}
+              onChangeText={(v) => onChangeNational(sanitizeNational(v, iso))}
+              onFocus={handleFocus}
+              onBlur={handleBlur}
+              placeholder={label}
+              placeholderTextColor={colors.mutedFg}
+              keyboardType="phone-pad"
+              autoComplete="tel-national"
+              returnKeyType="next"
+              onSubmitEditing={onSubmitEditing}
+              editable={editable}
+              accessibilityLabel={label}
+              selectionColor={colors.primary}
+            />
+          </View>
+        </View>
+      ) : isFloat ? (
         <View style={styles.floatRow}>
           {countryButton}
           <View style={styles.floatField}>
@@ -277,6 +314,38 @@ const styles = StyleSheet.create({
     borderRadius: radius.md,
     borderWidth: 1.5,
     borderColor: colors.cardBorder,
+  },
+
+  /* 'bar' variant: two white pills side by side, the same as the Pet
+     Essentials search bar (52px, thin border, navy when focused). */
+  barRow: { flexDirection: 'row', alignItems: 'stretch', gap: space.sm },
+  countryPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    minHeight: sz(52),
+    paddingHorizontal: space.lg,
+    backgroundColor: colors.card,
+    borderRadius: radius.pill,
+    borderWidth: 1,
+    borderColor: colors.cardBorder,
+  },
+  barField: {
+    flex: 1,
+    minWidth: 0,
+    minHeight: sz(52),
+    justifyContent: 'center',
+    paddingHorizontal: space.lg,
+    backgroundColor: colors.card,
+    borderRadius: radius.pill,
+    borderWidth: 1,
+    borderColor: colors.cardBorder,
+  },
+  barFieldFocused: { borderColor: colors.primary, borderWidth: 1.5 },
+  barInput: {
+    ...text.body,
+    color: colors.foreground,
+    paddingVertical: 12,
   },
 
   countryBtn: {

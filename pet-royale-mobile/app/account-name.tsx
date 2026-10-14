@@ -1,18 +1,54 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, type RefObject } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity, StyleSheet, ActivityIndicator, StatusBar,
-  ScrollView, KeyboardAvoidingView, Keyboard, Platform, Alert,
+  ScrollView, KeyboardAvoidingView, Keyboard, Platform, Alert, type TextInputProps,
 } from 'react-native';
 import { router } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { supabase } from '../lib/supabase';
-import { colors, space, common, radius } from '../constants/theme';
-import FloatField from '../components/FloatField';
+import { colors, space, common, radius, fonts } from '../constants/theme';
 import { Skeleton } from '../components/Skeleton';
 import { ScreenHeader } from '../components/ScreenHeader';
 import { tidy, useClientProfile } from '../lib/useClientProfile';
 
 type ClientProfile = ReturnType<typeof useClientProfile>;
+
+/* The field's size and shape, the same as the search bar on Pet Essentials
+   and the password fields: a white pill, 52px tall, with a thin border
+   that turns navy when focused. The label is the placeholder. */
+const FIELD_H = 52;
+
+/* Just the look of the field. It takes the same props the screen already
+   passes (label, value, focused, handlers), so nothing else changes. */
+function PillField({
+  label, value, focused, inputRef, onChangeText, onFocus, onBlur, ...inputProps
+}: {
+  label: string;
+  value: string;
+  focused: boolean;
+  inputRef?: RefObject<TextInput | null>;
+  onChangeText: (v: string) => void;
+  onFocus: () => void;
+  onBlur: () => void;
+} & Omit<TextInputProps, 'style' | 'value' | 'onChangeText' | 'onFocus' | 'onBlur'>) {
+  return (
+    <View style={[styles.field, focused && styles.fieldFocused]}>
+      <TextInput
+        {...inputProps}
+        ref={inputRef}
+        style={styles.fieldInput}
+        value={value}
+        onChangeText={onChangeText}
+        onFocus={onFocus}
+        onBlur={onBlur}
+        placeholder={label}
+        placeholderTextColor={colors.mutedFg}
+        accessibilityLabel={label}
+        selectionColor={colors.primary}
+      />
+    </View>
+  );
+}
 
 /** Edit name: first and last name, saved to the clients row and kept in
     step in auth metadata (see useClientProfile for why). */
@@ -31,8 +67,8 @@ export default function AccountNameScreen() {
       <View style={styles.container}>
         <ScreenHeader title="Account name" onBack={() => router.back()} large />
         <View style={styles.form}>
-          <Skeleton width="100%" height={60} radius={radius.md} />
-          <Skeleton width="100%" height={60} radius={radius.md} />
+          <Skeleton width="100%" height={FIELD_H} radius={radius.pill} />
+          <Skeleton width="100%" height={FIELD_H} radius={radius.pill} />
         </View>
       </View>
     );
@@ -110,7 +146,7 @@ function AccountNameForm({ profile }: { profile: ClientProfile }) {
         automaticallyAdjustKeyboardInsets
         showsVerticalScrollIndicator={false}
       >
-        <FloatField
+        <PillField
           label="First name"
           value={firstName}
           focused={focused === 'first'}
@@ -125,7 +161,7 @@ function AccountNameForm({ profile }: { profile: ClientProfile }) {
           onSubmitEditing={() => lastRef.current?.focus()}
           editable={!isSaving}
         />
-        <FloatField
+        <PillField
           label="Last name"
           value={lastName}
           focused={focused === 'last'}
@@ -164,6 +200,26 @@ const styles = StyleSheet.create({
   container: { ...common.screen },
   flex: { flex: 1 },
   form: { padding: space.xxl, gap: space.lg },
+
+  /* The pill field: white, thin border, navy and slightly thicker when
+     focused. */
+  field: {
+    minHeight: FIELD_H,
+    justifyContent: 'center',
+    paddingHorizontal: space.lg,
+    backgroundColor: colors.card,
+    borderRadius: radius.pill,
+    borderWidth: 1,
+    borderColor: colors.cardBorder,
+  },
+  fieldFocused: { borderColor: colors.primary, borderWidth: 1.5 },
+  fieldInput: {
+    paddingVertical: 12,
+    fontFamily: fonts.body,
+    fontSize: 16,
+    color: colors.foreground,
+  },
+
   footer: {
     paddingHorizontal: space.xxl,
     paddingTop: space.md,

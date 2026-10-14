@@ -1,10 +1,10 @@
 import {
-  useState, useEffect, useRef, type ReactNode, type ComponentProps,
+  useState, useEffect, useRef, type ReactNode,
 } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput,
-  ActivityIndicator, Modal, Image, Pressable, Alert, Animated,
-  RefreshControl, KeyboardAvoidingView, Platform,
+  ActivityIndicator, Modal, Image, Pressable, Alert, type TextInputProps,
+  RefreshControl, KeyboardAvoidingView, Keyboard, Platform,
 } from 'react-native';
 import { supabase } from '@/lib/supabase';
 import * as ImagePicker from 'expo-image-picker';
@@ -25,6 +25,21 @@ const STEPS = [
   { key: 2, label: 'Details' },
   { key: 3, label: 'Review' },
 ];
+
+/* Age is saved in whole years (pets.age) exactly as before. The Months
+   stepper only appears, and only saves, once the column below exists:
+
+     alter table pets add column age_months smallint
+       not null default 0 check (age_months between 0 and 11);
+
+   Run that, then set this to true. While it is false, nothing new is
+   sent to the database, so saving a pet cannot break. */
+const AGE_MONTHS_ENABLED = false;
+
+/* Up to this many species (or breeds) are shown as tiles/chips. More
+   than that switches to one tappable field that opens a searchable list,
+   so a clinic with 15+ species never gets a wall of buttons. */
+const INLINE_OPTIONS_MAX = 8;
 
 interface SpeciesOption { id: string; name: string; }
 interface BreedOption { id: string; name: string; }
@@ -73,32 +88,55 @@ const hasValue = (v: unknown) => v !== null && v !== undefined && v !== '';
 
 const initialOf = (name?: string | null) => (name?.trim()?.[0] || '?').toUpperCase();
 
-function formatAge(age: unknown): string {
-  if (!hasValue(age)) return '';
-  const n = Number(age);
-  if (Number.isNaN(n)) return '';
-  if (n === 0) return 'Under 1 yr';
-  return `${n} yr${n === 1 ? '' : 's'}`;
+const toInt = (s: string) => parseInt(s, 10) || 0;
+
+/* "2 yrs 3 mos", "8 mos", "Under 1 yr". Months are only shown when the
+   months column is switched on. */
+function formatAge(age: unknown, months: unknown = null): string {
+  const hasYears = hasValue(age) && !Number.isNaN(Number(age));
+  const y = hasYears ? Number(age) : 0;
+  const m = AGE_MONTHS_ENABLED && hasValue(months) && !Number.isNaN(Number(months)) ? Number(months) : 0;
+  if (!hasYears && m === 0) return '';
+  const parts: string[] = [];
+  if (y > 0) parts.push(`${y} yr${y === 1 ? '' : 's'}`);
+  if (m > 0) parts.push(`${m} mo${m === 1 ? '' : 's'}`);
+  return parts.length ? parts.join(' ') : 'Under 1 yr';
 }
 
-/* One line of facts under the pet's name: "Female · 3 yrs · 12 kg · Spayed".
-   Missing values are left out rather than shown as dashes, and so is an
-   "Unknown" answer: it isn't a fact worth printing. */
+/* The confirmation line under the age steppers: "About 2 years 3 months". */
+function ageSummary(years: string, months: string): string {
+  const y = toInt(years);
+  const m = AGE_MONTHS_ENABLED ? toInt(months) : 0;
+  const parts: string[] = [];
+  if (y > 0) parts.push(`${y} year${y === 1 ? '' : 's'}`);
+  if (m > 0) parts.push(`${m} month${m === 1 ? '' : 's'}`);
+  return parts.length ? `About ${parts.join(' ')}` : 'Under 1 year old';
+}
+
+/* One line of facts under the pet's name: "Female · 3 yrs · 12 kg".
+   Missing values are left out rather than shown as dashes. The
+   spayed/neutered answer is its own tag now (see neuteredTag). */
 function describePet(p: {
   gender?: string | null;
   age?: unknown;
+  ageMonths?: unknown;
   weight?: unknown;
-  neutered?: string | null;
 }): string {
   const parts: string[] = [];
   if (p.gender) parts.push(p.gender);
-  const age = formatAge(p.age);
+  const age = formatAge(p.age, p.ageMonths);
   if (age) parts.push(age);
   if (hasValue(p.weight) && Number(p.weight) > 0) parts.push(`${p.weight} kg`);
-  const female = p.gender === 'Female';
-  if (p.neutered === 'Yes') parts.push(female ? 'Spayed' : 'Neutered');
-  else if (p.neutered === 'No') parts.push(female ? 'Not spayed' : 'Not neutered');
   return parts.join(' · ');
+}
+
+/* "Not spayed" in amber, "Spayed" in green. An "Unknown" or missing
+   answer shows no tag: it isn't a fact worth printing. */
+function neuteredTag(gender?: string | null, neutered?: string | null): { label: string; warn: boolean } | null {
+  const female = gender === 'Female';
+  if (neutered === 'Yes') return { label: female ? 'Spayed' : 'Neutered', warn: false };
+  if (neutered === 'No') return { label: female ? 'Not spayed' : 'Not neutered', warn: true };
+  return null;
 }
 
 function validateIdentity(f: {
@@ -111,70 +149,48 @@ function validateIdentity(f: {
   return '';
 }
 
-function validateDetails(f: { gender: string; age: string }): string {
+function validateDetails(f: { gender: string; ageYears: string; ageMonths: string }): string {
   if (!f.gender) return 'Please select a gender.';
-  if (!f.age.trim()) return 'Please enter age.';
-  if (!/^\d+$/.test(f.age.trim())) return 'Age must be a whole number of years.';
+  const y = f.ageYears.trim();
+  const m = AGE_MONTHS_ENABLED ? f.ageMonths.trim() : '';
+  if (!y && !m) return 'Please enter age.';
+  if (y && !/^\d+$/.test(y)) return 'Years must be a whole number.';
+  if (m && (!/^\d+$/.test(m) || parseInt(m, 10) > 11)) return 'Months must be between 0 and 11.';
   return '';
+}
+
+/* True while the on-screen keyboard is up. The wizard footer uses it to
+   drop the bottom safe-area gap, so the buttons sit right on the keyboard. */
+function useKeyboardVisible() {
+  const [visible, setVisible] = useState(false);
+  useEffect(() => {
+    const ios = Platform.OS === 'ios';
+    const show = Keyboard.addListener(ios ? 'keyboardWillShow' : 'keyboardDidShow', () => setVisible(true));
+    const hide = Keyboard.addListener(ios ? 'keyboardWillHide' : 'keyboardDidHide', () => setVisible(false));
+    return () => { show.remove(); hide.remove(); };
+  }, []);
+  return visible;
 }
 
 /* ── Shared components ── */
 
-/* Floating-label field, laid out like the sign-in fields: empty, the label
-   sits inside a grey field; focused or filled, it moves up small and the
-   value sits underneath on a card fill. `left` and `right` hold an icon or
-   a small action (search uses both).
-
-   TEMPORARY: this stands in for the app's own FloatField, whose code I
-   hadn't seen when this was written. Once FloatField is confirmed to take
-   a label, a value, change handling and TextInput props, replace this
-   component's body (or its three uses) with it. */
-function FloatingField({
-  label, required, value, onChangeText, left, right, inputProps,
-}: {
-  label: string;
-  required?: boolean;
-  value: string;
-  onChangeText: (t: string) => void;
-  left?: ReactNode;
-  right?: ReactNode;
-  inputProps?: ComponentProps<typeof TextInput>;
-}) {
+/* Plain text field: the label sits above it (like every other field in
+   the form), the box has a navy border while typing. No floating label. */
+function PlainField({
+  label, value, onChangeText, ...inputProps
+}: { label: string; value: string; onChangeText: (t: string) => void } & TextInputProps) {
   const [focused, setFocused] = useState(false);
-  const raised = focused || value.length > 0;
-  const [lift] = useState(() => new Animated.Value(raised ? 1 : 0));
-
-  useEffect(() => {
-    Animated.timing(lift, { toValue: raised ? 1 : 0, duration: 140, useNativeDriver: false }).start();
-  }, [raised, lift]);
-
-  const inset = left ? 48 : 16;
-  const rightInset = right ? 72 : 16;
-  const labelTop = lift.interpolate({ inputRange: [0, 1], outputRange: [18, 8] });
-  const labelSize = lift.interpolate({ inputRange: [0, 1], outputRange: [16, 13] });
-
   return (
-    <View style={[styles.ff, raised && styles.ffRaised, focused && styles.ffFocused]}>
-      {left ? <View style={styles.ffLeft}>{left}</View> : null}
-      <Animated.Text
-        pointerEvents="none"
-        numberOfLines={1}
-        style={[styles.ffLabel, { left: inset, right: rightInset, top: labelTop, fontSize: labelSize }]}
-      >
-        {label}
-        {required ? <Text style={styles.required}> *</Text> : null}
-      </Animated.Text>
-      <TextInput
-        {...inputProps}
-        value={value}
-        onChangeText={onChangeText}
-        onFocus={(e) => { setFocused(true); inputProps?.onFocus?.(e); }}
-        onBlur={(e) => { setFocused(false); inputProps?.onBlur?.(e); }}
-        style={[styles.ffInput, { paddingLeft: inset, paddingRight: rightInset }]}
-        accessibilityLabel={label}
-      />
-      {right ? <View style={styles.ffRight}>{right}</View> : null}
-    </View>
+    <TextInput
+      {...inputProps}
+      style={[styles.plainInput, focused && styles.plainInputFocused]}
+      value={value}
+      onChangeText={onChangeText}
+      placeholderTextColor={colors.mutedFg}
+      onFocus={(e) => { setFocused(true); inputProps.onFocus?.(e); }}
+      onBlur={(e) => { setFocused(false); inputProps.onBlur?.(e); }}
+      accessibilityLabel={label}
+    />
   );
 }
 
@@ -210,6 +226,8 @@ function Segmented({
   );
 }
 
+/* The sheet lifts with the keyboard, so a search box inside it (the
+   species and breed lists) is never covered. */
 function BottomSheet({
   visible, onClose, bottomInset, children, animationType = 'slide',
 }: {
@@ -218,13 +236,13 @@ function BottomSheet({
 }) {
   return (
     <Modal visible={visible} transparent animationType={animationType} onRequestClose={onClose}>
-      <View style={styles.sheetOverlay}>
+      <KeyboardAvoidingView style={styles.sheetOverlay} behavior="padding">
         <Pressable style={StyleSheet.absoluteFill} onPress={onClose} accessibilityLabel="Close" />
         <View style={[styles.sheet, { paddingBottom: bottomInset + space.lg }]}>
           <View style={styles.sheetHandle} />
           {children}
         </View>
-      </View>
+      </KeyboardAvoidingView>
     </Modal>
   );
 }
@@ -269,6 +287,134 @@ function Chip({ label, selected, onPress }: { label: string; selected: boolean; 
     >
       <Text style={[styles.chipText, selected && styles.chipTextOn]}>{label}</Text>
     </TouchableOpacity>
+  );
+}
+
+/* Species / breed picker. Few options: tiles (species) or chips (breed).
+   Many options: one field that opens the searchable list, which lives at
+   screen level beside the photo sheet (see MyPetsScreen). */
+function OptionPicker({
+  options, selectedId, onSelect, onOpenList, placeholder, tiles,
+}: {
+  options: { id: string; name: string }[];
+  selectedId: string;
+  onSelect: (o: { id: string; name: string }) => void;
+  onOpenList: () => void;
+  placeholder: string;
+  tiles?: boolean;
+}) {
+  if (options.length > INLINE_OPTIONS_MAX) {
+    const selected = options.find((o) => o.id === selectedId);
+    return (
+      <TouchableOpacity
+        style={styles.pickerField}
+        onPress={onOpenList}
+        activeOpacity={0.85}
+        accessibilityRole="button"
+        accessibilityLabel={selected ? `${placeholder}: ${selected.name}` : placeholder}
+      >
+        <Text style={[styles.pickerValue, !selected && styles.pickerPlaceholder]} numberOfLines={1}>
+          {selected ? selected.name : placeholder}
+        </Text>
+        <Ionicons name="chevron-down" size={20} color={colors.mutedFg} />
+      </TouchableOpacity>
+    );
+  }
+
+  if (tiles) {
+    return (
+      <View style={styles.tiles}>
+        {options.map((o) => {
+          const on = selectedId === o.id;
+          return (
+            <TouchableOpacity
+              key={o.id}
+              style={[styles.tile, on && styles.tileOn]}
+              onPress={() => onSelect(o)}
+              activeOpacity={0.85}
+              accessibilityRole="button"
+              accessibilityState={{ selected: on }}
+            >
+              <Text style={[styles.tileText, on && styles.tileTextOn]} numberOfLines={2}>{o.name}</Text>
+            </TouchableOpacity>
+          );
+        })}
+      </View>
+    );
+  }
+
+  return (
+    <View style={styles.chips}>
+      {options.map((o) => (
+        <Chip key={o.id} label={o.name} selected={selectedId === o.id} onPress={() => onSelect(o)} />
+      ))}
+    </View>
+  );
+}
+
+/* One half of the age picker: − [ number ] +. The number is also a real
+   field, so it can be typed with the number keypad. Digits only, and it is
+   clamped to `max` as you type. The "0" placeholder is hidden while the
+   field is focused, so the caret never sits on top of it. */
+function AgeStepper({
+  label, unit, value, onChange, max,
+}: {
+  label: string; unit: string; value: string; onChange: (v: string) => void; max: number;
+}) {
+  const [focused, setFocused] = useState(false);
+  const n = toInt(value);
+  const step = (d: number) => onChange(String(Math.min(max, Math.max(0, n + d))));
+  const canDown = n > 0;
+  const canUp = n < max;
+
+  return (
+    <View style={styles.stepper}>
+      <Text style={styles.stepperLabel}>{label}</Text>
+      <View style={styles.stepperRow}>
+        <TouchableOpacity
+          style={[styles.stepBtn, !canDown && styles.stepBtnOff]}
+          onPress={() => step(-1)}
+          disabled={!canDown}
+          hitSlop={hitSlop}
+          activeOpacity={0.8}
+          accessibilityRole="button"
+          accessibilityLabel={`Decrease ${unit}`}
+        >
+          <Ionicons name="remove" size={22} color={canDown ? colors.primary : colors.mutedFg} />
+        </TouchableOpacity>
+
+        <TextInput
+          style={styles.stepInput}
+          value={value}
+          onChangeText={(t) => {
+            const digits = t.replace(/\D/g, '').slice(0, 2);
+            onChange(digits === '' ? '' : String(Math.min(max, parseInt(digits, 10))));
+          }}
+          placeholder={focused ? '' : '0'}
+          placeholderTextColor={colors.mutedFg}
+          keyboardType="number-pad"
+          maxLength={2}
+          selectTextOnFocus
+          returnKeyType="done"
+          onFocus={() => setFocused(true)}
+          onBlur={() => setFocused(false)}
+          onSubmitEditing={() => Keyboard.dismiss()}
+          accessibilityLabel={`${label} (${unit})`}
+        />
+
+        <TouchableOpacity
+          style={[styles.stepBtn, styles.stepBtnPlus, !canUp && styles.stepBtnOff]}
+          onPress={() => step(1)}
+          disabled={!canUp}
+          hitSlop={hitSlop}
+          activeOpacity={0.8}
+          accessibilityRole="button"
+          accessibilityLabel={`Increase ${unit}`}
+        >
+          <Ionicons name="add" size={22} color={canUp ? colors.primaryFg : colors.mutedFg} />
+        </TouchableOpacity>
+      </View>
+    </View>
   );
 }
 
@@ -319,41 +465,99 @@ function PetAvatar({ uri, name, size }: { uri?: string | null; name?: string; si
   );
 }
 
-/* One pet, one card. The whole card opens the manage sheet; the chevron
-   says it can be opened. */
+/* The list's search bar: a slim 48px pill with the magnifier inside and a
+   clear (x) button once something is typed. It is its own component on
+   purpose: the floating-label field is also used for the pet name and the
+   species / breed search in the add-pet form, and that must not change. */
+function SearchBar({
+  value, onChangeText, placeholder = 'Search pets',
+}: { value: string; onChangeText: (t: string) => void; placeholder?: string }) {
+  const [focused, setFocused] = useState(false);
+  return (
+    <View style={[styles.search, focused && styles.searchFocused]}>
+      <Ionicons name="search" size={20} color={colors.mutedFg} />
+      <TextInput
+        style={styles.searchInput}
+        value={value}
+        onChangeText={onChangeText}
+        placeholder={placeholder}
+        placeholderTextColor={colors.mutedFg}
+        returnKeyType="search"
+        autoCorrect={false}
+        onFocus={() => setFocused(true)}
+        onBlur={() => setFocused(false)}
+        accessibilityLabel={placeholder}
+      />
+      {value.length > 0 ? (
+        <TouchableOpacity
+          onPress={() => onChangeText('')}
+          hitSlop={hitSlop}
+          style={styles.searchClear}
+          accessibilityRole="button"
+          accessibilityLabel="Clear search"
+        >
+          <Ionicons name="close-circle" size={20} color={colors.mutedFg} />
+        </TouchableOpacity>
+      ) : null}
+    </View>
+  );
+}
+
+/* One pet per row inside the list card. The whole row opens the manage
+   sheet, and so does the "…" button: it is the visible hint that there
+   is a menu (Edit, Delete). The spayed / neutered line takes the colour
+   of the pet's gender (rose for female, blue for male); "Not spayed" is
+   bold because it is the one an owner may act on, "Spayed" is lighter. */
 function PetRow({
-  photoUri, name, species, breed, gender, age, weight, neutered, onPress,
+  first, photoUri, name, species, breed, gender, age, ageMonths, weight, neutered, onPress,
 }: {
+  first: boolean;
   photoUri?: string | null;
   name?: string;
   species?: string;
   breed?: string | null;
   gender?: string | null;
   age?: unknown;
+  ageMonths?: unknown;
   weight?: unknown;
   neutered?: string | null;
   onPress: () => void;
 }) {
   const subtitle = breed ? `${breed} · ${species}` : species || '';
-  const meta = describePet({ gender, age, weight, neutered });
+  const meta = describePet({ gender, age, ageMonths, weight });
+  const details = [subtitle, meta].filter(Boolean).join(' · ');
+  const tag = neuteredTag(gender, neutered);
+  const genderStyle = gender === 'Female' ? styles.statusFemale : gender === 'Male' ? styles.statusMale : null;
 
   return (
     <TouchableOpacity
-      style={styles.row}
+      style={[styles.row, !first && styles.rowDivider]}
       onPress={onPress}
       activeOpacity={0.8}
       accessibilityRole="button"
       accessibilityHint="Opens edit and delete options"
     >
-      <PetAvatar uri={photoUri} name={name} size={AVATAR} />
+      <PetAvatar uri={photoUri} name={name} size={AVATAR - 12} />
 
       <View style={styles.rowMain}>
-        <Text style={styles.rowName} numberOfLines={1}>{name || 'Unnamed pet'}</Text>
-        {subtitle ? <Text style={styles.rowSub} numberOfLines={1}>{subtitle}</Text> : null}
-        {meta ? <Text style={styles.rowMeta} numberOfLines={2}>{meta}</Text> : null}
+        <Text style={styles.rowName}>{name || 'Unnamed pet'}</Text>
+        {details ? <Text style={styles.rowMeta}>{details}</Text> : null}
+        {tag ? (
+          <Text style={[styles.rowStatus, genderStyle, tag.warn ? styles.statusWarn : styles.statusDone]}>
+            {tag.label}
+          </Text>
+        ) : null}
       </View>
 
-      <Ionicons name="chevron-forward" size={22} color={colors.primary} />
+      <TouchableOpacity
+        onPress={onPress}
+        hitSlop={hitSlop}
+        style={styles.moreBtn}
+        accessibilityRole="button"
+        accessibilityLabel={`More options for ${name || 'pet'}`}
+      >
+        <Ionicons name="ellipsis-horizontal" size={20} color={colors.mutedFg} />
+      </TouchableOpacity>
     </TouchableOpacity>
   );
 }
@@ -361,7 +565,7 @@ function PetRow({
 /* Review step: one card, two groups. Each group has its own Edit that
    jumps back to the step that holds those answers. */
 function ReviewCard({
-  photoUri, name, species, breed, gender, age, neutered, onEditIdentity, onEditDetails,
+  photoUri, name, species, breed, gender, age, ageMonths, neutered, onEditIdentity, onEditDetails,
 }: {
   photoUri?: string | null;
   name?: string;
@@ -369,6 +573,7 @@ function ReviewCard({
   breed?: string | null;
   gender?: string | null;
   age?: unknown;
+  ageMonths?: unknown;
   neutered?: string | null;
   onEditIdentity: () => void;
   onEditDetails: () => void;
@@ -376,7 +581,7 @@ function ReviewCard({
   const subtitle = breed ? `${breed} · ${species}` : species || '';
   const rows = [
     { label: 'Gender', value: gender || '—' },
-    { label: 'Age', value: formatAge(age) || '—' },
+    { label: 'Age', value: formatAge(age, ageMonths) || '—' },
     { label: gender === 'Female' ? 'Spayed' : 'Neutered', value: neutered || '—' },
   ];
 
@@ -441,7 +646,7 @@ function EmptyState({
         accessibilityRole="button"
       >
         <Text style={isSearch ? styles.btnSecondaryText : styles.btnPrimaryText}>
-          {isSearch ? 'Clear search' : 'Add your first pet'}
+          {isSearch ? 'Clear filters' : 'Add your first pet'}
         </Text>
       </TouchableOpacity>
     </View>
@@ -451,12 +656,14 @@ function EmptyState({
 export default function MyPetsScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
+  const keyboardVisible = useKeyboardVisible();
 
   const [pets, setPets] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [loadError, setLoadError] = useState('');
   const [search, setSearch] = useState('');
+  const [speciesFilter, setSpeciesFilter] = useState('');
   const [menuPet, setMenuPet] = useState<any>(null);
 
   const [showModal, setShowModal] = useState(false);
@@ -480,7 +687,9 @@ export default function MyPetsScreen() {
   });
   const availableBreeds: BreedOption[] =
     selectedSpeciesId && breedsFor.speciesId === selectedSpeciesId ? breedsFor.list : [];
-  const [age, setAge] = useState('');
+  // Age is typed or stepped as text, then checked in validateDetails.
+  const [ageYears, setAgeYears] = useState('');
+  const [ageMonths, setAgeMonths] = useState('');
   const [selectedGender, setSelectedGender] = useState('');
   const [neutered, setNeutered] = useState('No');
   const [photoUrl, setPhotoUrl] = useState<string | null>(null);
@@ -492,6 +701,11 @@ export default function MyPetsScreen() {
   const [cropSource, setCropSource] = useState<{ uri: string; width: number; height: number } | null>(null);
   const [showPhotoSheet, setShowPhotoSheet] = useState(false);
   const [uploadingPhoto, setUploadingPhoto] = useState(false);
+
+  /* The searchable species / breed list. Like the photo sheet it sits at
+     screen level, not inside the wizard Modal. */
+  const [pickerSheet, setPickerSheet] = useState<null | 'species' | 'breed'>(null);
+  const [pickerQuery, setPickerQuery] = useState('');
 
   const wizardScrollRef = useRef<ScrollView>(null);
 
@@ -521,10 +735,16 @@ export default function MyPetsScreen() {
     return () => { active = false; };
   }, [selectedSpeciesId]);
 
-  // Each step starts at the top instead of wherever the last one was scrolled to.
+  /* Each step starts at the top instead of wherever the last one was
+     scrolled to. The keyboard is also closed on every step change: when
+     the focused input unmounts, Android hands focus to the next TextInput
+     (the Age field on step 2) and pops the keyboard up by itself. */
   useEffect(() => {
     wizardScrollRef.current?.scrollTo({ y: 0, animated: false });
-  }, [wizardStep]);
+    if (!showModal) return;
+    const t = setTimeout(() => Keyboard.dismiss(), 60);
+    return () => clearTimeout(t);
+  }, [wizardStep, showModal]);
 
   /* Refetch after a save or delete, pull-to-refresh, and Retry. Only the
      very first load shows the skeleton; later fetches are quiet, so the
@@ -576,7 +796,12 @@ export default function MyPetsScreen() {
     setSelectedSpecies(pet.species || '');
     setSelectedSpeciesId(match?.id || '');
     setBreed(pet.breed || '');
-    setAge(pet.age !== null && pet.age !== undefined ? String(pet.age) : '');
+    setAgeYears(pet.age !== null && pet.age !== undefined ? String(pet.age) : '');
+    setAgeMonths(
+      AGE_MONTHS_ENABLED && pet.age_months !== null && pet.age_months !== undefined
+        ? String(pet.age_months)
+        : '',
+    );
     setSelectedGender(pet.gender || '');
     setNeutered(pet.neutered || '');
     setPhotoUrl(pet.photo_url || null);
@@ -587,11 +812,12 @@ export default function MyPetsScreen() {
 
   const resetForm = () => {
     setName(''); setSelectedSpecies(''); setSelectedSpeciesId(''); setBreed('');
-    setAge(''); setSelectedGender(''); setNeutered('No');
+    setAgeYears(''); setAgeMonths(''); setSelectedGender(''); setNeutered('No');
     setPhotoUrl(null); setPendingPhotoUri(null); setPendingPhotoBase64(null); setError('');
   };
 
   const closeModal = () => {
+    Keyboard.dismiss();
     setShowModal(false);
     setEditingPet(null);
     resetForm();
@@ -601,7 +827,7 @@ export default function MyPetsScreen() {
   const requestClose = () => {
     if (isSubmitting) return;
     const dirty = !editingPet && !!(
-      name || selectedSpecies || breed || age || selectedGender || pendingPhotoUri
+      name || selectedSpecies || breed || ageYears || ageMonths || selectedGender || pendingPhotoUri
     );
     if (!dirty) { closeModal(); return; }
     Alert.alert('Discard this pet?', 'The details you entered will be lost.', [
@@ -655,19 +881,41 @@ export default function MyPetsScreen() {
 
   const hasPhoto = !!(pendingPhotoUri || photoUrl);
 
+  /* Picking a species clears the breed (a breed belongs to one species);
+     tapping the chosen one again un-picks it. Used by the tiles and by
+     the searchable list. The keyboard is closed first so the rest of the
+     tiles (and the Continue button) are not left half hidden. */
+  const chooseSpecies = (sp: SpeciesOption) => {
+    Keyboard.dismiss();
+    const same = selectedSpeciesId === sp.id;
+    setSelectedSpecies(same ? '' : sp.name);
+    setSelectedSpeciesId(same ? '' : sp.id);
+    setBreed('');
+  };
+
+  const chooseBreed = (b: BreedOption) => setBreed(breed === b.name ? '' : b.name);
+
+  const openPicker = (which: 'species' | 'breed') => {
+    setPickerQuery('');
+    setPickerSheet(which);
+  };
+  const closePicker = () => { setPickerSheet(null); setPickerQuery(''); };
+
   const goNextStep = () => {
     const err =
       wizardStep === 1
         ? validateIdentity({ hasPhoto, name, species: selectedSpecies, breed })
         : wizardStep === 2
-          ? validateDetails({ gender: selectedGender, age })
+          ? validateDetails({ gender: selectedGender, ageYears, ageMonths })
           : '';
     if (err) { setError(err); return; }
+    Keyboard.dismiss();
     setError('');
     setWizardStep((s) => Math.min(3, s + 1));
   };
 
   const goPrevStep = () => {
+    Keyboard.dismiss();
     setError('');
     setWizardStep((s) => Math.max(1, s - 1));
   };
@@ -695,16 +943,20 @@ export default function MyPetsScreen() {
        clinic's own scale reading (grooming pricing depends on it); color
        and notes are no longer asked for here. Leaving a key out of an
        update (rather than setting it to null) keeps whatever value is
-       already stored, so editing a pet never wipes them. */
-    const payload = {
+       already stored, so editing a pet never wipes them.
+
+       age stays whole years. A pet entered as "0 years 8 months" saves
+       age 0 plus age_months 8 (once AGE_MONTHS_ENABLED is on). */
+    const payload: Record<string, unknown> = {
       name: name.trim(),
       species: selectedSpecies,
       breed: breed.trim() || null,
-      age: age ? parseInt(age, 10) : null,
+      age: toInt(ageYears),
       gender: selectedGender,
       neutered: neutered || null,
       photo_url: finalPhotoUrl,
     };
+    if (AGE_MONTHS_ENABLED) payload.age_months = Math.min(11, toInt(ageMonths));
 
     let submitError;
     if (editingPet) {
@@ -738,35 +990,57 @@ export default function MyPetsScreen() {
     ]);
   };
 
+  /* Species filter chips are built from the owner's own pets, with counts.
+     A filter whose pets are all gone (deleted, or renamed) quietly drops
+     back to "All" instead of showing an empty list. */
+  const speciesCounts = pets.reduce<Record<string, number>>((acc, p) => {
+    if (p.species) acc[p.species] = (acc[p.species] || 0) + 1;
+    return acc;
+  }, {});
+  const speciesNames = Object.keys(speciesCounts);
+  const activeFilter = speciesFilter && speciesCounts[speciesFilter] ? speciesFilter : '';
+
   const filtered = pets.filter((p) => {
+    if (activeFilter && p.species !== activeFilter) return false;
     if (!search.trim()) return true;
     const q = search.toLowerCase();
     return p.name?.toLowerCase().includes(q) || p.species?.toLowerCase().includes(q) || p.breed?.toLowerCase().includes(q);
   });
 
+  const isFiltering = !!search.trim() || !!activeFilter;
   const petWord = pets.length === 1 ? 'pet' : 'pets';
   const countLabel =
     pets.length === 0
       ? ''
-      : search.trim()
+      : isFiltering
         ? `${filtered.length} of ${pets.length} ${petWord}`
         : `${pets.length} ${petWord}`;
+
+  const clearFilters = () => { setSearch(''); setSpeciesFilter(''); };
 
   // Continue stays greyed out until the step's required fields are filled.
   const stepValid =
     wizardStep === 1 ? !validateIdentity({ hasPhoto, name, species: selectedSpecies, breed })
-    : wizardStep === 2 ? !validateDetails({ gender: selectedGender, age })
+    : wizardStep === 2 ? !validateDetails({ gender: selectedGender, ageYears, ageMonths })
     : true;
   const blocked = !stepValid && !isSubmitting;
+  const ageReady = !!ageYears.trim() || (AGE_MONTHS_ENABLED && !!ageMonths.trim());
+
+  // The searchable list's contents (species or breeds), filtered by what's typed.
+  const pickerOptions: { id: string; name: string }[] = pickerSheet === 'breed' ? availableBreeds : clinicSpecies;
+  const pickerShown = pickerOptions.filter((o) => o.name.toLowerCase().includes(pickerQuery.trim().toLowerCase()));
 
   return (
     <View style={styles.container}>
-      {/* Header: back, title on the left, Add pet on the right, as in the mockup. */}
+      {/* Header: back, title with the pet count under it, Add pet on the right. */}
       <View style={[styles.header, { paddingTop: insets.top + space.sm }]}>
         <TouchableOpacity onPress={handleBack} hitSlop={hitSlop} style={styles.headerBack} accessibilityRole="button" accessibilityLabel="Back">
           <Ionicons name="chevron-back" size={28} color={colors.foreground} />
         </TouchableOpacity>
-        <Text style={styles.headerTitle} numberOfLines={1}>My Pets</Text>
+        <View style={styles.headerCopy}>
+          <Text style={styles.headerTitle} numberOfLines={1}>My Pets</Text>
+          {countLabel ? <Text style={styles.count}>{countLabel}</Text> : null}
+        </View>
         <TouchableOpacity style={styles.addBtn} onPress={openAdd} activeOpacity={0.85} accessibilityRole="button" accessibilityLabel="Add pet">
           <Ionicons name="add" size={20} color={colors.primaryFg} />
           <Text style={styles.addBtnText}>Add pet</Text>
@@ -785,25 +1059,30 @@ export default function MyPetsScreen() {
         {/* ── Search ── */}
         {pets.length > 0 && (
           <View style={styles.toolbar}>
-            <FloatingField
-              label="Search by name, species or breed"
-              value={search}
-              onChangeText={setSearch}
-              left={<Ionicons name="search" size={20} color={colors.mutedFg} />}
-              right={
-                search.length > 0 ? (
-                  <TouchableOpacity onPress={() => setSearch('')} hitSlop={hitSlop} accessibilityRole="button" accessibilityLabel="Clear search">
-                    <Text style={styles.clearText}>Clear</Text>
-                  </TouchableOpacity>
-                ) : null
-              }
-              inputProps={{ returnKeyType: 'search', autoCorrect: false }}
-            />
+            <SearchBar value={search} onChangeText={setSearch} />
           </View>
         )}
 
-        {/* ── Count (under the search) ── */}
-        {countLabel ? <Text style={styles.count}>{countLabel}</Text> : null}
+        {/* ── Species filter (only when there is more than one species to filter by) ── */}
+        {speciesNames.length > 1 && (
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            keyboardShouldPersistTaps="handled"
+            style={styles.filterScroll}
+            contentContainerStyle={styles.filterRow}
+          >
+            <Chip label={`All ${pets.length}`} selected={!activeFilter} onPress={() => setSpeciesFilter('')} />
+            {speciesNames.map((s) => (
+              <Chip
+                key={s}
+                label={`${s} ${speciesCounts[s]}`}
+                selected={activeFilter === s}
+                onPress={() => setSpeciesFilter(activeFilter === s ? '' : s)}
+              />
+            ))}
+          </ScrollView>
+        )}
 
         {/* ── Load error ── */}
         {loadError ? (
@@ -821,17 +1100,18 @@ export default function MyPetsScreen() {
         ) : filtered.length === 0 ? (
           !loadError && (
             <EmptyState
-              isSearch={pets.length > 0 && !!search.trim()}
-              query={search}
+              isSearch={pets.length > 0 && isFiltering}
+              query={search.trim() || activeFilter}
               onAdd={openAdd}
-              onClearSearch={() => setSearch('')}
+              onClearSearch={clearFilters}
             />
           )
         ) : (
           <View style={styles.list}>
-            {filtered.map((pet) => (
+            {filtered.map((pet, i) => (
               <PetRow
                 key={pet.id}
+                first={i === 0}
                 onPress={() => setMenuPet(pet)}
                 photoUri={pet.photo_url}
                 name={pet.name}
@@ -839,6 +1119,7 @@ export default function MyPetsScreen() {
                 breed={pet.breed}
                 gender={pet.gender}
                 age={pet.age}
+                ageMonths={pet.age_months}
                 weight={pet.weight}
                 neutered={pet.neutered}
               />
@@ -864,16 +1145,27 @@ export default function MyPetsScreen() {
         ) : null}
       </BottomSheet>
 
-      {/* ══════════════════ Add / edit pet: 3-step wizard ══════════════════ */}
-      <Modal visible={showModal} animationType="slide" onRequestClose={requestClose}>
-        <KeyboardAvoidingView style={styles.wizardContainer} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+      {/* ══════════════════ Add / edit pet: 3-step wizard ══════════════════
+          KeyboardAvoidingView uses "padding" on both platforms so the footer
+          buttons ride up on the keyboard.
+
+          statusBarTranslucent: on Android a Modal otherwise starts below the
+          status bar, so KeyboardAvoidingView under-measures the keyboard by
+          one status-bar height and the footer ends up clipped behind it. The
+          header already adds insets.top, so nothing else needs to change.
+
+          If Android ever shows a double gap above the keyboard, change
+          Android's behavior here to undefined. */}
+      <Modal visible={showModal} animationType="slide" statusBarTranslucent onRequestClose={requestClose}>
+        <KeyboardAvoidingView style={styles.wizardContainer} behavior="padding">
           <View style={[styles.wizardHeader, { paddingTop: insets.top + space.sm }]}>
             <TouchableOpacity onPress={requestClose} hitSlop={hitSlop} style={styles.wizardClose} accessibilityRole="button" accessibilityLabel="Cancel">
-              <Ionicons name="close" size={28} color={colors.foreground} />
+              <Ionicons name="close" size={24} color={colors.foreground} />
             </TouchableOpacity>
             <Text style={styles.wizardHeaderTitle} numberOfLines={1}>
               {editingPet ? 'Edit pet' : 'New pet'}
             </Text>
+            <Text style={styles.progressText}>Step {wizardStep} of {STEPS.length}</Text>
           </View>
 
           <View style={styles.progress}>
@@ -882,9 +1174,15 @@ export default function MyPetsScreen() {
                 <View key={s.key} style={[styles.progressBar, s.key <= wizardStep && styles.progressBarOn]} />
               ))}
             </View>
-            <View style={styles.progressMeta}>
-              <Text style={styles.progressText}>Step {wizardStep} of {STEPS.length}</Text>
-              <Text style={styles.progressLabel}>{STEPS[wizardStep - 1].label}</Text>
+            <View style={styles.progressLabels}>
+              {STEPS.map((s) => (
+                <Text
+                  key={s.key}
+                  style={[styles.progressLabel, s.key === wizardStep && styles.progressLabelOn]}
+                >
+                  {s.label}
+                </Text>
+              ))}
             </View>
           </View>
 
@@ -893,6 +1191,7 @@ export default function MyPetsScreen() {
             style={styles.wizardScroll}
             showsVerticalScrollIndicator={false}
             keyboardShouldPersistTaps="handled"
+            keyboardDismissMode="on-drag"
           >
             <View style={styles.wizardForm}>
               {error ? (
@@ -904,7 +1203,7 @@ export default function MyPetsScreen() {
               {/* ── Step 1: Identity ── */}
               {wizardStep === 1 && (
                 <>
-                  <View style={styles.photoCenter}>
+                  <View style={styles.photoRow}>
                     <TouchableOpacity
                       onPress={() => setShowPhotoSheet(true)}
                       activeOpacity={0.85}
@@ -931,15 +1230,31 @@ export default function MyPetsScreen() {
                       </View>
                     </TouchableOpacity>
 
-                    <TouchableOpacity onPress={() => setShowPhotoSheet(true)} hitSlop={hitSlop} accessibilityRole="button">
-                      <Text style={styles.photoLink}>{hasPhoto ? 'Change photo' : 'Add photo'} <Text style={styles.required}>*</Text></Text>
-                    </TouchableOpacity>
-                    <Text style={styles.photoHint}>A clear photo helps our staff recognize your pet.</Text>
+                    <View style={styles.photoCopy}>
+                      <Text style={styles.photoTitle}>Pet photo <Text style={styles.required}>*</Text></Text>
+                      <Text style={styles.photoHint}>A clear photo helps our staff recognize your pet.</Text>
+                      <TouchableOpacity
+                        style={styles.photoBtn}
+                        onPress={() => setShowPhotoSheet(true)}
+                        hitSlop={hitSlop}
+                        activeOpacity={0.85}
+                        accessibilityRole="button"
+                      >
+                        <Text style={styles.photoBtnText}>{hasPhoto ? 'Change photo' : 'Add photo'}</Text>
+                      </TouchableOpacity>
+                    </View>
                   </View>
 
-                  <View style={styles.fieldTop}>
-                    <FloatingField label="Pet name" required value={name} onChangeText={setName} />
-                  </View>
+                  <Text style={styles.fieldLabel}>Pet name <Text style={styles.required}>*</Text></Text>
+                  <PlainField
+                    label="Pet name"
+                    placeholder="Enter your pet's name"
+                    value={name}
+                    onChangeText={setName}
+                    returnKeyType="done"
+                    autoCapitalize="words"
+                    onSubmitEditing={() => Keyboard.dismiss()}
+                  />
                   <Text style={styles.fieldHint}>This is how you&apos;ll see them across the app.</Text>
 
                   <Text style={styles.fieldLabel}>Species <Text style={styles.required}>*</Text></Text>
@@ -948,21 +1263,14 @@ export default function MyPetsScreen() {
                       The clinic hasn&apos;t listed any species yet — please contact them directly.
                     </Text>
                   ) : (
-                    <View style={styles.chips}>
-                      {clinicSpecies.map((sp) => (
-                        <Chip
-                          key={sp.id}
-                          label={sp.name}
-                          selected={selectedSpeciesId === sp.id}
-                          onPress={() => {
-                            const same = selectedSpeciesId === sp.id;
-                            setSelectedSpecies(same ? '' : sp.name);
-                            setSelectedSpeciesId(same ? '' : sp.id);
-                            setBreed('');
-                          }}
-                        />
-                      ))}
-                    </View>
+                    <OptionPicker
+                      tiles
+                      options={clinicSpecies}
+                      selectedId={selectedSpeciesId}
+                      onSelect={chooseSpecies}
+                      onOpenList={() => openPicker('species')}
+                      placeholder="Choose species"
+                    />
                   )}
                   <Text style={styles.fieldHint}>Only species the clinic actually treats are listed here.</Text>
 
@@ -974,16 +1282,13 @@ export default function MyPetsScreen() {
                       The clinic hasn&apos;t listed any breeds for {selectedSpecies.toLowerCase()} yet.
                     </Text>
                   ) : (
-                    <View style={styles.chips}>
-                      {availableBreeds.map((b) => (
-                        <Chip
-                          key={b.id}
-                          label={b.name}
-                          selected={breed === b.name}
-                          onPress={() => setBreed(breed === b.name ? '' : b.name)}
-                        />
-                      ))}
-                    </View>
+                    <OptionPicker
+                      options={availableBreeds}
+                      selectedId={availableBreeds.find((b) => b.name === breed)?.id || ''}
+                      onSelect={chooseBreed}
+                      onOpenList={() => openPicker('breed')}
+                      placeholder="Choose breed"
+                    />
                   )}
                 </>
               )}
@@ -1007,15 +1312,23 @@ export default function MyPetsScreen() {
                     onChange={(n) => setNeutered(neutered === n ? '' : n)}
                   />
 
-                  <View style={styles.fieldTop}>
-                    <FloatingField
-                      label="Age (years)"
-                      required
-                      value={age}
-                      onChangeText={setAge}
-                      inputProps={{ keyboardType: 'number-pad' }}
-                    />
+                  <Text style={styles.fieldLabel}>Age <Text style={styles.required}>*</Text></Text>
+                  <View style={styles.stepperRowWrap}>
+                    <AgeStepper label="Years" unit="years" value={ageYears} onChange={setAgeYears} max={99} />
+                    {AGE_MONTHS_ENABLED && (
+                      <AgeStepper label="Months" unit="months" value={ageMonths} onChange={setAgeMonths} max={11} />
+                    )}
                   </View>
+                  {ageReady ? (
+                    <View style={styles.ageSummary}>
+                      <Text style={styles.ageSummaryText}>{ageSummary(ageYears, ageMonths)}</Text>
+                    </View>
+                  ) : null}
+                  <Text style={styles.fieldHint}>
+                    {AGE_MONTHS_ENABLED
+                      ? 'An estimate is fine. Under a year old? Use 0 years and the months.'
+                      : 'An estimate is fine. Under a year old? Enter 0.'}
+                  </Text>
                 </>
               )}
 
@@ -1030,7 +1343,8 @@ export default function MyPetsScreen() {
                     species={selectedSpecies}
                     breed={breed}
                     gender={selectedGender}
-                    age={age}
+                    age={ageYears.trim() ? ageYears : AGE_MONTHS_ENABLED && ageMonths.trim() ? 0 : null}
+                    ageMonths={ageMonths}
                     neutered={neutered}
                     onEditIdentity={() => { setError(''); setWizardStep(1); }}
                     onEditDetails={() => { setError(''); setWizardStep(2); }}
@@ -1040,7 +1354,14 @@ export default function MyPetsScreen() {
             </View>
           </ScrollView>
 
-          <View style={[styles.wizardFooter, { paddingBottom: insets.bottom + space.md }]}>
+          {/* With the keyboard open the home-bar gap is dropped, so the
+              buttons sit directly on top of the keyboard. */}
+          <View
+            style={[
+              styles.wizardFooter,
+              { paddingBottom: keyboardVisible ? space.md : insets.bottom + space.md },
+            ]}
+          >
             {wizardStep > 1 && (
               <TouchableOpacity
                 style={[styles.btn, styles.btnSecondary, styles.footerBack]}
@@ -1088,6 +1409,31 @@ export default function MyPetsScreen() {
         </TouchableOpacity>
       </BottomSheet>
 
+      {/* ── Searchable species / breed list (used when there are many) ── */}
+      <BottomSheet visible={!!pickerSheet} onClose={closePicker} bottomInset={insets.bottom}>
+        <Text style={styles.sheetTitle}>
+          {pickerSheet === 'breed' ? `Choose ${selectedSpecies.toLowerCase()} breed` : 'Choose species'}
+        </Text>
+        <View style={styles.pickerSearch}>
+          <SearchBar value={pickerQuery} onChangeText={setPickerQuery} placeholder="Search" />
+        </View>
+        <ScrollView style={styles.pickerList} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
+          {pickerShown.map((o) => (
+            <SheetRow
+              key={o.id}
+              label={o.name}
+              selected={pickerSheet === 'breed' ? breed === o.name : selectedSpeciesId === o.id}
+              onPress={() => {
+                if (pickerSheet === 'breed') chooseBreed(o);
+                else chooseSpecies(o);
+                closePicker();
+              }}
+            />
+          ))}
+          {pickerShown.length === 0 ? <Text style={styles.fieldHint}>Nothing matches. Check the spelling or call the clinic.</Text> : null}
+        </ScrollView>
+      </BottomSheet>
+
       {/* Shared circle cropper, at screen level beside the photo sheet (not
           inside the wizard Modal), the same way the profile photo screen
           uses it. */}
@@ -1105,7 +1451,7 @@ export default function MyPetsScreen() {
 }
 
 const AVATAR = 56;
-const PHOTO = 96;
+const PHOTO = 88;
 const CONTROL_H = 44;
 const BUTTON_H = 48;
 
@@ -1127,22 +1473,23 @@ const styles = StyleSheet.create({
     backgroundColor: colors.background,
   },
   headerBack: { minHeight: CONTROL_H, justifyContent: 'center' },
+  headerCopy: { flex: 1, minWidth: 0 },
   headerTitle: {
-    flex: 1,
     fontFamily: fonts.bodyBold,
     fontSize: 28,
     lineHeight: 34,
     letterSpacing: -0.5,
     color: colors.foreground,
   },
-  count: { ...text.small, color: colors.mutedFg, paddingHorizontal: space.xxl, paddingTop: space.md },
+  count: { ...text.small, color: colors.mutedFg },
 
   /* ── Buttons ── */
   /* Every full-width button: 48px, fully rounded. Primary is solid navy
      (Continue, Save changes, Add pet, Add your first pet). Secondary is a
-     navy outline (Back, Cancel, Clear search). Red is only for deleting.
-     A blocked Continue is flat and muted, like the Book screen's, instead
-     of a faded copy of the navy button. */
+     navy outline (Back, Cancel, Clear filters). Red is only for deleting.
+     A blocked Continue is a flat, clearly visible grey (same tone as the
+     progress bars) instead of a faded copy of the navy button or a fill
+     that disappears into the page. */
   btn: {
     height: BUTTON_H,
     borderRadius: BUTTON_H / 2,
@@ -1159,7 +1506,7 @@ const styles = StyleSheet.create({
   },
   btnSecondaryText: { ...text.bodyBold, color: colors.primary },
   btnDisabled: { opacity: 0.6 },
-  btnBlocked: { backgroundColor: colors.muted },
+  btnBlocked: { backgroundColor: '#D9D6C8' },
   btnBlockedText: { color: colors.mutedFg },
 
   /* Add pet: the one solid navy button in the header, a 44px pill. */
@@ -1176,38 +1523,33 @@ const styles = StyleSheet.create({
   },
   addBtnText: { ...text.smallBold, color: colors.primaryFg },
 
-  /* ── Floating-label field ── */
-  ff: {
-    height: 60,
-    borderRadius: 20,
+  /* ── Search + species filter ── */
+  toolbar: { paddingHorizontal: space.xxl, marginTop: space.lg },
+  search: {
+    height: 48,
+    borderRadius: 24,
     borderWidth: 2,
-    borderColor: 'transparent',
-    backgroundColor: colors.muted,
-    justifyContent: 'center',
+    borderColor: colors.cardBorder,
+    backgroundColor: colors.card,
+    paddingLeft: space.lg,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
   },
-  ffRaised: { backgroundColor: colors.card, borderColor: colors.cardBorder },
-  ffFocused: { borderColor: colors.primary },
-  ffLabel: {
-    position: 'absolute',
-    lineHeight: 20,
-    fontFamily: fonts.body,
-    color: colors.mutedFg,
-  },
-  ffInput: {
+  searchFocused: { borderColor: colors.primary },
+  searchInput: {
+    flex: 1,
+    minWidth: 0,
     height: '100%',
-    paddingTop: 22,
-    paddingBottom: 6,
-    fontSize: 17,
+    paddingVertical: 0,
+    fontSize: 16,
     fontFamily: fonts.bodyMedium,
     color: colors.foreground,
     includeFontPadding: false,
   },
-  ffLeft: { position: 'absolute', left: 16, top: 0, bottom: 0, justifyContent: 'center' },
-  ffRight: { position: 'absolute', right: 16, top: 0, bottom: 0, justifyContent: 'center' },
-
-  /* ── Search ── */
-  toolbar: { paddingHorizontal: space.xxl, marginTop: space.lg },
-  clearText: { ...text.smallBold, color: colors.primary },
+  searchClear: { width: CONTROL_H, height: CONTROL_H, alignItems: 'center', justifyContent: 'center' },
+  filterScroll: { flexGrow: 0, marginTop: space.md },
+  filterRow: { paddingHorizontal: space.xxl, gap: space.sm },
 
   /* ── Segmented control: one track, a navy pill for the chosen option ── */
   segmented: {
@@ -1247,20 +1589,26 @@ const styles = StyleSheet.create({
   emptyText: { ...text.small, color: colors.mutedFg, textAlign: 'center', marginTop: space.sm },
   emptyBtn: { alignSelf: 'stretch', marginTop: space.xl },
 
-  /* ── Pet list: one card per pet, the whole card is the tap target ── */
-  list: { marginTop: space.lg, paddingHorizontal: space.xxl, gap: space.md },
+  /* ── Pet list: one rounded card, a row per pet, hairlines between ── */
+  list: {
+    marginTop: space.lg,
+    marginHorizontal: space.lg,
+    backgroundColor: colors.card,
+    borderWidth: 1,
+    borderColor: colors.cardBorder,
+    borderRadius: 24,
+    overflow: 'hidden',
+  },
   row: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: space.md,
-    paddingVertical: 14,
-    paddingLeft: space.lg,
-    paddingRight: space.md,
+    paddingVertical: space.md,
+    paddingLeft: space.md + 2,
+    paddingRight: space.xs,
     backgroundColor: colors.card,
-    borderWidth: 2,
-    borderColor: colors.cardBorder,
-    borderRadius: 24,
   },
+  rowDivider: { borderTopWidth: 1, borderTopColor: colors.cardBorder },
   avatarFallback: {
     backgroundColor: colors.primary,
     alignItems: 'center',
@@ -1269,8 +1617,16 @@ const styles = StyleSheet.create({
   avatarInitial: { fontFamily: text.display.fontFamily, color: colors.accent },
   rowMain: { flex: 1, minWidth: 0 },
   rowName: { ...text.bodyBold, fontSize: 18, lineHeight: 24, color: colors.foreground },
-  rowSub: { ...text.small, color: colors.mutedFg, marginTop: 2 },
-  rowMeta: { ...text.caption, color: colors.mutedFg, marginTop: 2 },
+  rowMeta: { ...text.small, color: colors.mutedFg, marginTop: 1 },
+  moreBtn: { width: CONTROL_H, height: CONTROL_H, alignItems: 'center', justifyContent: 'center' },
+
+  /* Spayed / neutered line, coloured by gender. The two colours are
+     literal because the theme has no tokens for them. */
+  rowStatus: { fontSize: 13, lineHeight: 18, marginTop: 3 },
+  statusFemale: { color: '#A12D62' },
+  statusMale: { color: '#1F5A99' },
+  statusWarn: { fontFamily: fonts.bodyBold },
+  statusDone: { fontFamily: fonts.bodyMedium },
 
   /* ── Sheets ── */
   sheetOverlay: { flex: 1, backgroundColor: colors.overlay, justifyContent: 'flex-end' },
@@ -1297,6 +1653,24 @@ const styles = StyleSheet.create({
   destructiveText: { color: colors.destructive },
   sheetCancel: { marginTop: space.lg },
 
+  /* Searchable species / breed list */
+  pickerSearch: { marginBottom: space.sm },
+  pickerList: { maxHeight: 320 },
+  pickerField: {
+    height: 56,
+    borderRadius: 18,
+    borderWidth: 2,
+    borderColor: colors.cardBorder,
+    backgroundColor: colors.card,
+    paddingHorizontal: space.lg,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: space.md,
+  },
+  pickerValue: { flex: 1, fontFamily: fonts.bodyBold, fontSize: 16, color: colors.foreground },
+  pickerPlaceholder: { fontFamily: fonts.body, color: colors.mutedFg },
+
   /* ── Wizard ── */
   wizardContainer: { ...common.screen },
   wizardHeader: {
@@ -1306,24 +1680,32 @@ const styles = StyleSheet.create({
     paddingHorizontal: space.xxl,
     paddingBottom: space.sm,
   },
-  wizardClose: { minHeight: CONTROL_H, justifyContent: 'center' },
+  wizardClose: {
+    width: CONTROL_H,
+    height: CONTROL_H,
+    borderRadius: CONTROL_H / 2,
+    backgroundColor: colors.muted,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   wizardHeaderTitle: {
     flex: 1,
     fontFamily: fonts.bodyBold,
-    fontSize: 28,
-    lineHeight: 34,
+    fontSize: 26,
+    lineHeight: 32,
     letterSpacing: -0.5,
     color: colors.foreground,
   },
 
-  /* Same progress bars as the Book flow. */
+  /* Same progress bars as the Book flow, with the three step names under them. */
   progress: { paddingHorizontal: space.xxl, paddingTop: space.md, paddingBottom: space.sm },
   progressBars: { flexDirection: 'row', gap: 8 },
-  progressBar: { flex: 1, height: 5, borderRadius: 3, backgroundColor: '#D9D6C8' },
+  progressBar: { flex: 1, height: 6, borderRadius: 3, backgroundColor: '#D9D6C8' },
   progressBarOn: { backgroundColor: colors.primary },
-  progressMeta: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 10 },
-  progressText: { fontFamily: fonts.body, fontSize: 14, lineHeight: 20, color: colors.mutedFg },
-  progressLabel: { fontFamily: fonts.bodyBold, fontSize: 14, lineHeight: 20, color: colors.primary },
+  progressLabels: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 8 },
+  progressText: { fontFamily: fonts.bodyBold, fontSize: 14, lineHeight: 20, color: colors.mutedFg },
+  progressLabel: { fontFamily: fonts.bodyBold, fontSize: 13, lineHeight: 18, color: colors.mutedFg },
+  progressLabelOn: { color: colors.primary },
 
   wizardScroll: { flex: 1 },
   wizardForm: { paddingHorizontal: space.xxl, paddingBottom: space.xl },
@@ -1335,13 +1717,44 @@ const styles = StyleSheet.create({
   },
   errorText: { ...text.small, color: colors.destructive },
 
-  fieldTop: { marginTop: space.xl },
+  plainInput: {
+    height: 56,
+    borderRadius: 18,
+    borderWidth: 2,
+    borderColor: colors.cardBorder,
+    backgroundColor: colors.card,
+    paddingHorizontal: space.lg,
+    paddingVertical: 0,
+    fontSize: 17,
+    fontFamily: fonts.bodyMedium,
+    color: colors.foreground,
+    includeFontPadding: false,
+  },
+  plainInputFocused: { borderColor: colors.primary },
   fieldLabel: { fontSize: 15, fontFamily: fonts.bodyBold, color: colors.foreground, marginBottom: space.sm, marginTop: space.xl },
   required: { color: colors.destructive },
   optionalText: { color: colors.mutedFg, fontFamily: fonts.body, fontSize: 13 },
   fieldHint: { ...text.caption, color: colors.mutedFg, marginTop: space.sm },
 
-  /* Species and breed chips: same as the time slots on the Book screen. */
+  /* Species tiles: three to a row, text only. */
+  tiles: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
+  tile: {
+    width: '31%',
+    flexGrow: 1,
+    minHeight: 56,
+    paddingHorizontal: space.sm,
+    borderRadius: 18,
+    borderWidth: 2,
+    borderColor: colors.cardBorder,
+    backgroundColor: colors.card,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  tileOn: { backgroundColor: colors.primary, borderColor: colors.primary },
+  tileText: { fontFamily: fonts.bodyBold, fontSize: 15, color: colors.foreground, textAlign: 'center' },
+  tileTextOn: { color: colors.primaryFg },
+
+  /* Breed chips: same as the time slots on the Book screen. */
   chips: { flexDirection: 'row', flexWrap: 'wrap', gap: space.sm },
   chip: {
     height: CONTROL_H,
@@ -1357,8 +1770,8 @@ const styles = StyleSheet.create({
   chipText: { fontFamily: fonts.bodyBold, fontSize: 14, color: colors.foreground },
   chipTextOn: { color: colors.primaryFg },
 
-  /* Photo: one big round picture, centred, with a + badge */
-  photoCenter: { alignItems: 'center', paddingTop: space.lg, gap: space.sm },
+  /* Photo: picture with a camera badge on the left, words and button on the right */
+  photoRow: { flexDirection: 'row', alignItems: 'center', gap: space.lg, paddingTop: space.lg },
   photoCircle: {
     width: PHOTO,
     height: PHOTO,
@@ -1394,8 +1807,65 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  photoLink: { ...text.smallBold, color: colors.foreground },
-  photoHint: { ...text.caption, color: colors.mutedFg, textAlign: 'center' },
+  photoCopy: { flex: 1, minWidth: 0 },
+  photoTitle: { fontFamily: fonts.bodyBold, fontSize: 17, lineHeight: 24, color: colors.foreground },
+  photoHint: { ...text.caption, color: colors.mutedFg, marginTop: 2 },
+  photoBtn: {
+    alignSelf: 'flex-start',
+    height: CONTROL_H,
+    marginTop: space.sm,
+    paddingHorizontal: space.lg,
+    borderRadius: CONTROL_H / 2,
+    borderWidth: 2,
+    borderColor: colors.primary,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  photoBtnText: { fontFamily: fonts.bodyBold, fontSize: 14, color: colors.primary },
+
+  /* Age: Years (and Months) steppers side by side */
+  stepperRowWrap: { flexDirection: 'row', gap: space.md },
+  stepper: {
+    flex: 1,
+    paddingVertical: space.md,
+    paddingHorizontal: space.sm,
+    backgroundColor: colors.card,
+    borderWidth: 2,
+    borderColor: colors.cardBorder,
+    borderRadius: 24,
+  },
+  stepperLabel: { fontFamily: fonts.bodyBold, fontSize: 13, color: colors.mutedFg, textAlign: 'center' },
+  stepperRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: space.sm },
+  stepBtn: {
+    width: CONTROL_H,
+    height: CONTROL_H,
+    borderRadius: CONTROL_H / 2,
+    backgroundColor: colors.muted,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  stepBtnPlus: { backgroundColor: colors.primary },
+  stepBtnOff: { backgroundColor: colors.muted, opacity: 0.6 },
+  stepInput: {
+    flex: 1,
+    minWidth: 0,
+    height: 52,
+    textAlign: 'center',
+    fontFamily: fonts.bodyBold,
+    fontSize: 34,
+    color: colors.foreground,
+    paddingVertical: 0,
+    includeFontPadding: false,
+  },
+  ageSummary: {
+    marginTop: space.md,
+    paddingVertical: 12,
+    paddingHorizontal: space.lg,
+    borderRadius: 16,
+    backgroundColor: '#E4EFEA',
+    alignItems: 'center',
+  },
+  ageSummaryText: { fontFamily: fonts.bodyBold, fontSize: 15, color: '#17564D' },
 
   /* Review: one card, two groups */
   reviewTitle: { fontFamily: fonts.bodyBold, fontSize: 22, lineHeight: 28, color: colors.foreground, marginTop: space.xl },
@@ -1435,18 +1905,17 @@ const styles = StyleSheet.create({
 });
 
 /* ── Loading state ──
-   Same cards as the real list (round photo, a name line, a breed and
-   species line, a details line), so nothing jumps when the pets arrive. */
+   Same rows as the real list, so nothing jumps when the pets arrive. */
 function PetListSkeleton() {
   return (
     <View style={styles.list} accessibilityLabel="Loading your pets" accessibilityLiveRegion="polite">
       {[0, 1, 2, 3].map((i) => (
-        <View key={i} style={styles.row}>
-          <Skeleton width={AVATAR + 12} height={AVATAR + 12} radius={(AVATAR + 12) / 2} />
+        <View key={i} style={[styles.row, i > 0 && styles.rowDivider]}>
+          <Skeleton width={AVATAR} height={AVATAR} radius={AVATAR / 2} />
           <View style={styles.rowMain}>
             <Skeleton width="45%" height={16} />
-            <Skeleton width="60%" height={13} style={{ marginTop: 8 }} />
-            <Skeleton width="75%" height={12} style={{ marginTop: 6 }} />
+            <Skeleton width="70%" height={13} style={{ marginTop: 8 }} />
+            <Skeleton width="35%" height={12} style={{ marginTop: 6 }} />
           </View>
         </View>
       ))}

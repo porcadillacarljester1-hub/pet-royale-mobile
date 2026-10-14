@@ -9,7 +9,6 @@ import {
   ActivityIndicator,
   Alert,
   Keyboard,
-  KeyboardAvoidingView,
   LayoutAnimation,
   Platform,
   StatusBar,
@@ -19,9 +18,9 @@ import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
   AlertCircle,
-  Circle,
-  CheckCircle2,
+  Check,
   XCircle,
+  CheckCircle2,
   Eye,
   EyeOff,
   ShieldCheck,
@@ -31,7 +30,7 @@ import { supabase } from '../../lib/supabase';
 import { passwordProblem } from '../../lib/passwordPolicy';
 import { colors, status, text, fonts, space, radius, shadow, common, hitSlop } from '../../constants/theme';
 import { Skeleton } from '../../components/Skeleton';
-import FloatField from '../../components/FloatField';
+import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
 import { BUTTON_H } from '../../components/AuthShell';
 
 /* The rules shown under "New password". They mirror lib/passwordPolicy.ts
@@ -46,9 +45,19 @@ const PASSWORD_RULES: { label: string; test: (v: string) => boolean }[] = [
   { label: 'A symbol', test: (v) => /[^A-Za-z0-9]/.test(v) },
 ];
 
-/* One password field, used three times. It uses the same floating-label
-   FloatField as the sign-in screen, and owns its own show/hide and focus
-   state, so the screen only has to care about the values. */
+/* On tablets and landscape the form stays a readable column instead of
+   stretching across the whole screen. */
+const MAX_FORM_WIDTH = 560;
+
+/* The field's size and shape, the same as the search bar on Pet
+   Essentials: a white pill, 52px tall, with a thin border that turns navy
+   when focused. The label is the placeholder inside the field. */
+const FIELD_H = 52;
+
+/* One password field, used three times. It has a show/hide eye, and owns
+   its own show/hide and focus state, so the screen only has to care
+   about the values. The label is the placeholder, as in the Pet Essentials
+   search bar; it is also the accessibility label. */
 function PasswordField({
   label,
   value,
@@ -59,6 +68,7 @@ function PasswordField({
   returnKeyType,
   onSubmitEditing,
   onFocus,
+  invalid = false,
 }: {
   label: string;
   value: string;
@@ -69,44 +79,54 @@ function PasswordField({
   returnKeyType: TextInputProps['returnKeyType'];
   onSubmitEditing: () => void;
   onFocus?: () => void;
+  invalid?: boolean;
 }) {
   const [show, setShow] = useState(false);
   const [focused, setFocused] = useState(false);
 
   return (
-    <FloatField
-      label={label}
-      value={value}
-      focused={focused}
-      inputRef={inputRef}
-      onChangeText={onChangeText}
-      onFocus={() => {
-        setFocused(true);
-        onFocus?.();
-      }}
-      onBlur={() => setFocused(false)}
-      secureTextEntry={!show}
-      autoCapitalize="none"
-      autoCorrect={false}
-      autoComplete={autoComplete}
-      textContentType={textContentType}
-      returnKeyType={returnKeyType}
-      blurOnSubmit={returnKeyType !== 'next'}
-      onSubmitEditing={onSubmitEditing}
-      right={
-        <TouchableOpacity
-          style={styles.eyeBtn}
-          onPress={() => setShow((v) => !v)}
-          activeOpacity={0.7}
-          accessibilityRole="button"
-          accessibilityLabel={show ? `Hide ${label.toLowerCase()}` : `Show ${label.toLowerCase()}`}
-        >
-          {show
-            ? <EyeOff size={20} color={colors.mutedFg} />
-            : <Eye size={20} color={colors.mutedFg} />}
-        </TouchableOpacity>
-      }
-    />
+    <View
+      style={[
+        styles.field,
+        focused && styles.fieldFocused,
+        invalid && styles.fieldInvalid,
+      ]}
+    >
+      <TextInput
+        ref={inputRef}
+        style={styles.fieldInput}
+        value={value}
+        onChangeText={onChangeText}
+        onFocus={() => {
+          setFocused(true);
+          onFocus?.();
+        }}
+        onBlur={() => setFocused(false)}
+        secureTextEntry={!show}
+        autoCapitalize="none"
+        autoCorrect={false}
+        autoComplete={autoComplete}
+        textContentType={textContentType}
+        returnKeyType={returnKeyType}
+        blurOnSubmit={returnKeyType !== 'next'}
+        onSubmitEditing={onSubmitEditing}
+        placeholder={label}
+        placeholderTextColor={colors.mutedFg}
+        accessibilityLabel={label}
+        selectionColor={colors.primary}
+      />
+      <TouchableOpacity
+        style={styles.eyeBtn}
+        onPress={() => setShow((v) => !v)}
+        activeOpacity={0.7}
+        accessibilityRole="button"
+        accessibilityLabel={show ? `Hide ${label.toLowerCase()}` : `Show ${label.toLowerCase()}`}
+      >
+        {show
+          ? <EyeOff size={20} color={colors.mutedFg} />
+          : <Eye size={20} color={colors.mutedFg} />}
+      </TouchableOpacity>
+    </View>
   );
 }
 
@@ -114,6 +134,8 @@ export default function SecurityScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const statusBarHeight = Math.max(insets.top, StatusBar.currentHeight ?? 0);
+  // Keeps content clear of a notch or rounded corner in landscape.
+  const sideInset = Math.max(insets.left, insets.right);
 
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
@@ -128,15 +150,14 @@ export default function SecurityScreen() {
   const newRef = useRef<TextInput>(null);
   const confirmRef = useRef<TextInput>(null);
 
-  /* ── Keyboard handling (same approach as the sign-in screen) ──
-     On edge-to-edge Android the window doesn't shrink for the keyboard, so
-     we measure how much of this screen the keyboard covers and add that as
-     bottom padding. The form can then scroll clear of it. */
-  const rootRef = useRef<View>(null);
+  /* ── Keyboard handling ──
+     The app runs edge-to-edge, so the window doesn't shrink for the
+     keyboard. react-native-keyboard-controller's KeyboardAvoidingView
+     (below) shrinks the form area by exactly the space the keyboard covers,
+     which lifts the pinned button right above the keys on every device. */
   const scrollRef = useRef<ScrollView>(null);
-  const [kbPad, setKbPad] = useState(0);
-  // While the keyboard is up the screen goes compact (smaller header, no
-  // subtitle, tighter spacing) so the whole form and the button fit above it.
+  // While the keyboard is up the screen goes compact (no subtitle, tighter
+  // spacing) so as much of the form as possible stays in view.
   const [kbOpen, setKbOpen] = useState(false);
   // Only let the screen scroll when the content really is taller than it.
   const [viewH, setViewH] = useState(0);
@@ -147,18 +168,14 @@ export default function SecurityScreen() {
   };
 
   useEffect(() => {
-    const show = Keyboard.addListener('keyboardDidShow', (e) => {
+    const show = Keyboard.addListener('keyboardDidShow', () => {
       LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
       setKbOpen(true);
-      rootRef.current?.measureInWindow((_x, y, _w, h) => {
-        setKbPad(Math.max(0, y + h - e.endCoordinates.screenY));
-        setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 80);
-      });
+      setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 80);
     });
     const hide = Keyboard.addListener('keyboardDidHide', () => {
       LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
       setKbOpen(false);
-      setKbPad(0);
     });
     return () => {
       show.remove();
@@ -192,6 +209,18 @@ export default function SecurityScreen() {
   const canSubmit =
     currentPassword.length > 0 && newPassword.length > 0 && confirmPassword.length > 0;
   const saveDisabled = saving || !canSubmit;
+
+  /* Strength meter: one segment per rule met. It is only feedback;
+     passwordProblem() stays the real check on submit. */
+  const metCount = PASSWORD_RULES.filter((r) => r.test(newPassword)).length;
+  const strength =
+    newPassword.length === 0
+      ? { label: 'Not set', color: colors.mutedFg }
+      : metCount === PASSWORD_RULES.length
+        ? { label: 'Strong', color: status.success.fg }
+        : metCount >= 3
+          ? { label: 'Fair', color: status.warning.fg }
+          : { label: 'Weak', color: status.danger.fg };
 
   /* Editing any field clears the last error, so a stale message never
      sits under a form the person has already started fixing. */
@@ -272,11 +301,19 @@ export default function SecurityScreen() {
     }
   };
 
+  // The line above the pinned button only shows when the form actually
+  // scrolls underneath it.
+  const footerRaised = contentH > viewH + 1;
+  // Resting: clear of the system navigation. Keyboard open: the form area
+  // already ends at the keyboard, so only a small gap is needed.
+  const footerBottom = kbOpen ? space.md : insets.bottom + space.lg;
+
   return (
-    <View ref={rootRef} collapsable={false} style={styles.container}>
+    <View style={[styles.container, { paddingLeft: sideInset, paddingRight: sideInset }]}>
       <StatusBar barStyle="dark-content" backgroundColor={colors.background} />
 
-      {/* Same back button as the sign-in screen: a plain chevron, no circle. */}
+      {/* Same back button as the sign-in screen: a plain chevron, no circle.
+          The title sits right beside it. */}
       <View style={[styles.header, { paddingTop: statusBarHeight + space.sm }]}>
         <TouchableOpacity
           style={styles.backBtn}
@@ -288,21 +325,23 @@ export default function SecurityScreen() {
         >
           <ChevronLeft size={28} color={colors.primary} strokeWidth={2.2} />
         </TouchableOpacity>
-        <Text style={styles.sectionTitle} accessibilityRole="header">
+        <Text
+          style={styles.sectionTitle}
+          accessibilityRole="header"
+          numberOfLines={1}
+          adjustsFontSizeToFit
+        >
           Change password
         </Text>
       </View>
 
-      <KeyboardAvoidingView
-        style={styles.flex}
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-      >
+      <KeyboardAvoidingView style={styles.flex} behavior="padding">
         <ScrollView
           ref={scrollRef}
           style={styles.flex}
           contentContainerStyle={[
             styles.form,
-            { paddingBottom: insets.bottom + (kbOpen ? space.lg : space.xxxl) + kbPad },
+            { paddingBottom: space.xl },
           ]}
           keyboardShouldPersistTaps="handled"
           showsVerticalScrollIndicator={false}
@@ -338,42 +377,17 @@ export default function SecurityScreen() {
                   onSubmitEditing={() => newRef.current?.focus()}
                 />
 
-                <View>
-                  <PasswordField
-                    label="New password"
-                    value={newPassword}
-                    onChangeText={edit(setNewPassword)}
-                    autoComplete="new-password"
-                    textContentType="newPassword"
-                    inputRef={newRef}
-                    returnKeyType="next"
-                    onSubmitEditing={() => confirmRef.current?.focus()}
-                    onFocus={() => scrollToBottomSoon()}
-                  />
-
-                  {/* Ticks off as the person types. Icon and colour both
-                      change, so it doesn't rely on colour alone. */}
-                  <View style={[styles.rules, kbOpen && styles.rulesCompact]}>
-                    {PASSWORD_RULES.map((rule) => {
-                      const met = rule.test(newPassword);
-                      return (
-                        <View
-                          key={rule.label}
-                          style={styles.ruleRow}
-                          accessible
-                          accessibilityLabel={`${rule.label}, ${met ? 'met' : 'not met'}`}
-                        >
-                          {met
-                            ? <CheckCircle2 size={15} color={colors.primary} strokeWidth={2} />
-                            : <Circle size={15} color={colors.mutedFg} strokeWidth={1.8} />}
-                          <Text style={[styles.ruleText, met && styles.ruleTextMet]}>
-                            {rule.label}
-                          </Text>
-                        </View>
-                      );
-                    })}
-                  </View>
-                </View>
+                <PasswordField
+                  label="New password"
+                  value={newPassword}
+                  onChangeText={edit(setNewPassword)}
+                  autoComplete="new-password"
+                  textContentType="newPassword"
+                  inputRef={newRef}
+                  returnKeyType="next"
+                  onSubmitEditing={() => confirmRef.current?.focus()}
+                  onFocus={() => scrollToBottomSoon()}
+                />
 
                 <View>
                   <PasswordField
@@ -384,6 +398,7 @@ export default function SecurityScreen() {
                     textContentType="newPassword"
                     inputRef={confirmRef}
                     returnKeyType="go"
+                    invalid={passwordsMismatch}
                     onSubmitEditing={handleChangePassword}
                     onFocus={() => scrollToBottomSoon()}
                   />
@@ -407,10 +422,89 @@ export default function SecurityScreen() {
                 </View>
               </View>
 
+              {/* Strength meter and the rules, in one card. The ticks fill
+                  in as the person types. Icon, text weight and colour all
+                  change, so it doesn't rely on colour alone. */}
+              <View style={[styles.rulesCard, kbOpen && styles.rulesCardCompact]}>
+                <View style={styles.strengthRow}>
+                  <Text style={styles.strengthTitle}>Password strength</Text>
+                  <Text
+                    style={[styles.strengthLabel, { color: strength.color }]}
+                    accessibilityLiveRegion="polite"
+                  >
+                    {strength.label}
+                  </Text>
+                </View>
+                <View
+                  style={styles.segments}
+                  accessible
+                  accessibilityLabel={`Password strength: ${strength.label}`}
+                >
+                  {PASSWORD_RULES.map((rule, i) => (
+                    <View
+                      key={rule.label}
+                      style={[
+                        styles.segment,
+                        { backgroundColor: i < metCount ? strength.color : colors.border },
+                      ]}
+                    />
+                  ))}
+                </View>
+
+                <View style={[styles.rules, kbOpen && styles.rulesCompact]}>
+                  {PASSWORD_RULES.map((rule) => {
+                    const met = rule.test(newPassword);
+                    return (
+                      <View
+                        key={rule.label}
+                        style={styles.ruleRow}
+                        accessible
+                        accessibilityLabel={`${rule.label}, ${met ? 'met' : 'not met'}`}
+                      >
+                        <View style={[styles.ruleDot, met && styles.ruleDotMet]}>
+                          {met && <Check size={12} color={colors.primaryFg} strokeWidth={3.2} />}
+                        </View>
+                        <Text style={[styles.ruleText, met && styles.ruleTextMet]}>
+                          {rule.label}
+                        </Text>
+                      </View>
+                    );
+                  })}
+                </View>
+              </View>
+            </>
+          ) : (
+            <View style={styles.providerNotice}>
+              <View style={styles.providerIcon}>
+                <ShieldCheck size={20} color={colors.primary} strokeWidth={1.9} />
+              </View>
+              <View style={styles.providerCopy}>
+                <Text style={styles.providerTitle}>Signed in with Google</Text>
+                <Text style={styles.providerSub}>
+                  Your password is managed by Google, so there is nothing to change here.
+                </Text>
+              </View>
+            </View>
+          )}
+        </ScrollView>
+
+        {/* Pinned button: always on screen, above the keyboard when it is
+            open, so it never scrolls away or hides behind the keys. Shown
+            as a placeholder while the account type loads, so nothing jumps. */}
+        {usesPassword !== false && (
+          <View
+            style={[
+              styles.footer,
+              footerRaised && styles.footerRaised,
+              { paddingBottom: footerBottom },
+            ]}
+          >
+            {usesPassword === null ? (
+              <Skeleton width="100%" height={BUTTON_H} radius={BUTTON_H / 2} />
+            ) : (
               <TouchableOpacity
                 style={[
                   styles.saveBtn,
-                  kbOpen && styles.saveBtnCompact,
                   !canSubmit && !saving && common.buttonPrimaryDisabled,
                   saving && styles.saveBtnBusy,
                 ]}
@@ -429,21 +523,9 @@ export default function SecurityScreen() {
                   </Text>
                 )}
               </TouchableOpacity>
-            </>
-          ) : (
-            <View style={styles.providerNotice}>
-              <View style={styles.providerIcon}>
-                <ShieldCheck size={20} color={colors.primary} strokeWidth={1.9} />
-              </View>
-              <View style={styles.providerCopy}>
-                <Text style={styles.providerTitle}>Signed in with Google</Text>
-                <Text style={styles.providerSub}>
-                  Your password is managed by Google, so there is nothing to change here.
-                </Text>
-              </View>
-            </View>
-          )}
-        </ScrollView>
+            )}
+          </View>
+        )}
       </KeyboardAvoidingView>
     </View>
   );
@@ -453,13 +535,24 @@ const styles = StyleSheet.create({
   container: { ...common.screen },
   flex: { flex: 1 },
 
-  form: { paddingHorizontal: space.xxl, paddingTop: space.lg },
+  /* A readable column on tablets: centered and capped in width. */
+  form: {
+    paddingHorizontal: space.xxl,
+    paddingTop: space.lg,
+    width: '100%',
+    maxWidth: MAX_FORM_WIDTH,
+    alignSelf: 'center',
+  },
   loader: { marginTop: space.xxxl },
 
-  /* Same title style as "Welcome back" on the sign-in screen. */
+  /* Same title style as "Welcome back" on the sign-in screen. It shares
+     the row with the chevron and shrinks rather than wrapping or pushing
+     anything off a narrow screen. */
   sectionTitle: {
+    flex: 1,
+    minWidth: 0,
     fontFamily: fonts.display,
-    fontSize: 28,
+    fontSize: 26,
     lineHeight: 34,
     letterSpacing: -0.5,
     color: colors.foreground,
@@ -467,7 +560,6 @@ const styles = StyleSheet.create({
   sectionSub: {
     ...text.body,
     color: colors.mutedFg,
-    marginTop: space.sm,
     marginBottom: space.xl,
   },
 
@@ -503,17 +595,69 @@ const styles = StyleSheet.create({
   },
 
   eyeBtn: {
-    width: BUTTON_H,
-    height: BUTTON_H,
+    width: 44,
+    height: 44,
     alignItems: 'center',
     justifyContent: 'center',
   },
 
-  rules: { gap: 6, marginTop: space.md },
-  rulesCompact: { gap: 4, marginTop: space.sm },
+  /* Same as the Pet Essentials search bar: a white pill with a thin
+     border, navy when focused. */
+  field: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    minHeight: FIELD_H,
+    paddingLeft: space.lg,
+    paddingRight: space.xs,
+    backgroundColor: colors.card,
+    borderRadius: radius.pill,
+    borderWidth: 1,
+    borderColor: colors.cardBorder,
+  },
+  fieldFocused: { borderColor: colors.primary, borderWidth: 1.5 },
+  fieldInvalid: { borderColor: colors.destructive, borderWidth: 1.5 },
+  fieldInput: {
+    flex: 1,
+    minWidth: 0,
+    paddingVertical: 12,
+    fontFamily: fonts.body,
+    fontSize: 16,
+    color: colors.foreground,
+  },
+
+  /* Strength meter + rules card. */
+  rulesCard: {
+    ...common.card,
+    marginTop: space.xl,
+    padding: space.lg,
+  },
+  rulesCardCompact: { marginTop: space.lg, padding: space.md },
+  strengthRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: space.md,
+  },
+  strengthTitle: { ...text.smallBold, color: colors.foreground, flexShrink: 1 },
+  strengthLabel: { ...text.caption, fontFamily: text.bodyBold.fontFamily, flexShrink: 0 },
+  segments: { flexDirection: 'row', gap: 6, marginTop: space.sm },
+  segment: { flex: 1, height: 6, borderRadius: 3 },
+
+  rules: { gap: 10, marginTop: space.lg },
+  rulesCompact: { gap: 6, marginTop: space.md },
   ruleRow: { flexDirection: 'row', alignItems: 'center', gap: space.sm },
-  ruleText: { ...text.caption, color: colors.mutedFg },
-  ruleTextMet: { color: colors.primary },
+  ruleDot: {
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    borderWidth: 2,
+    borderColor: colors.mutedFg,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  ruleDotMet: { backgroundColor: colors.primary, borderColor: colors.primary },
+  ruleText: { ...text.small, color: colors.mutedFg, flex: 1 },
+  ruleTextMet: { color: colors.foreground, fontFamily: text.bodyBold.fontFamily },
 
   matchRow: {
     flexDirection: 'row',
@@ -523,17 +667,27 @@ const styles = StyleSheet.create({
   },
   matchText: { ...text.caption, fontFamily: text.bodyBold.fontFamily },
 
+  /* Pinned button area, same width cap as the form. */
+  footer: {
+    width: '100%',
+    maxWidth: MAX_FORM_WIDTH,
+    alignSelf: 'center',
+    paddingHorizontal: space.xxl,
+    paddingTop: space.md,
+    backgroundColor: colors.background,
+    borderTopWidth: 1,
+    borderTopColor: 'transparent',
+  },
+  footerRaised: { borderTopColor: colors.border },
   saveBtn: {
     height: BUTTON_H,
     borderRadius: BUTTON_H / 2,
     backgroundColor: colors.primary,
     alignItems: 'center',
     justifyContent: 'center',
-    marginTop: space.xl,
     ...shadow.primary,
   },
   saveBtnBusy: { opacity: 0.75 },
-  saveBtnCompact: { marginTop: space.lg },
   saveBtnText: { ...common.buttonPrimaryText },
 
   /* Same card and beige icon circle as the Profile tiles. */
@@ -559,20 +713,26 @@ const styles = StyleSheet.create({
 
 /* ── Loading state ──
    Shown for the moment it takes to learn how this account signs in.
-   Shaped like the password form, the common case. */
+   Shaped like the real form: subtitle, three fields, then the rules card.
+   The button's own placeholder sits in the pinned footer. */
 function SecuritySkeleton() {
   return (
     <View accessibilityLabel="Loading" accessibilityLiveRegion="polite">
-      <Skeleton width={140} height={16} />
-      <Skeleton width="70%" height={12} style={{ marginTop: space.sm, marginBottom: space.lg }} />
+      <Skeleton width="70%" height={14} style={{ marginBottom: space.xl }} />
       <View style={styles.fields}>
         {[0, 1, 2].map((i) => (
           <View key={i}>
-            <Skeleton width="100%" height={BUTTON_H + 4} radius={radius.md} />
+            <Skeleton width="100%" height={FIELD_H} radius={radius.pill} />
           </View>
         ))}
       </View>
-      <Skeleton width="100%" height={BUTTON_H} radius={BUTTON_H / 2} style={{ marginTop: space.xl }} />
+      <View style={[styles.rulesCard, { gap: space.md }]}>
+        <Skeleton width="45%" height={14} />
+        <Skeleton width="100%" height={6} radius={3} />
+        {[0, 1, 2, 3, 4].map((i) => (
+          <Skeleton key={i} width={i % 2 ? '55%' : '70%'} height={14} />
+        ))}
+      </View>
     </View>
   );
 }

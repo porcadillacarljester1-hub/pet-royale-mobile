@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
-  RefreshControl, Modal,
+  RefreshControl, Modal, Image,
 } from 'react-native';
 import { Swipeable, GestureHandlerRootView } from 'react-native-gesture-handler';
 import { Ionicons } from '@expo/vector-icons';
@@ -27,12 +27,35 @@ const BG = colors.background;
 const RED = '#ef4444';
 const UNDO_MS = 4000;
 
+/* Where a tapped appointment notification goes: the Visits screen, with
+   the appointment id and which tab to open. If the Visits file is not
+   called appointments.tsx, change this one line. */
+const VISITS_ROUTE = '/(tabs)/appointments';
+
 /* Appointments with these statuses live in Visits > History.
-   Everything else lives in Visits > Upcoming.
-   Adjust to match your appointments.status values. */
-const HISTORY_STATUSES = ['completed', 'cancelled', 'canceled', 'no_show', 'declined'];
+   Everything else lives in Visits > Upcoming. The check is "contains", so
+   "Completed", "completed" and "complete" all count. Adjust to match your
+   appointments.status values. */
+const HISTORY_STATUS_WORDS = ['complet', 'cancel', 'no_show', 'no-show', 'noshow', 'declin', 'done', 'finish'];
+
+const isHistoryStatus = (status: unknown) => {
+  const s = String(status ?? '').toLowerCase();
+  return HISTORY_STATUS_WORDS.some(w => s.includes(w));
+};
 
 type TabKey = 'all' | 'unread';
+type Kind = 'completed' | 'confirmed' | 'cancelled' | 'other';
+
+/* What the notification is about, read from its own title and message.
+   Used for the icon, and as the fallback for which Visits tab to open
+   when the appointment itself can't be looked up. */
+function kindOf(n: AppNotification): Kind {
+  const t = `${n.title ?? ''} ${n.message ?? ''}`.toLowerCase();
+  if (t.includes('complet')) return 'completed';
+  if (t.includes('cancel') || t.includes('declin')) return 'cancelled';
+  if (t.includes('confirm')) return 'confirmed';
+  return 'other';
+}
 
 /* created_at is "timestamp without time zone", so Supabase returns it with
    no zone marker and JS would read it as local time. Treat it as UTC.
@@ -42,14 +65,15 @@ function parseDate(value: string): Date {
   return new Date(hasZone ? value : value.replace(' ', 'T') + 'Z');
 }
 
-/* Short social-style time: now, 5m, 11h, 3d, Oct 7 */
-function shortTime(value: string): string {
+/* Readable time: Just now, 7 min ago, 17 hours ago, 3 days ago, Oct 7 */
+function timeAgo(value: string): string {
   const mins = Math.round((Date.now() - parseDate(value).getTime()) / 60000);
-  if (mins < 1) return 'now';
-  if (mins < 60) return `${mins}m`;
-  if (mins < 1440) return `${Math.round(mins / 60)}h`;
+  if (mins < 1) return 'Just now';
+  if (mins < 60) return `${mins} min ago`;
+  const hours = Math.round(mins / 60);
+  if (mins < 1440) return `${hours} hour${hours === 1 ? '' : 's'} ago`;
   const days = Math.round(mins / 1440);
-  if (days < 7) return `${days}d`;
+  if (days < 7) return `${days} day${days === 1 ? '' : 's'} ago`;
   return parseDate(value).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 }
 
@@ -68,6 +92,93 @@ function getDateGroupLabel(value: string): string {
 
 const GROUP_ORDER = ['Today', 'Yesterday', 'This Week', 'Earlier'];
 
+type PetInfo = { name?: string | null; photo_url?: string | null };
+
+/* The pet behind each appointment notification, so the row can show its
+   photo like the pet list does. Two small lookups for the whole list:
+   appointments (to get each pet_id), then pets (name and photo).
+
+   Assumes appointments has a pet_id column that points at pets.id. If
+   your column is called something else, change 'pet_id' below. Any
+   failure just returns nothing: the row then shows the status icon
+   instead, and nothing else on the screen is affected. */
+async function loadPetsForAppointments(ids: string[]): Promise<Record<string, PetInfo>> {
+  const out: Record<string, PetInfo> = {};
+  if (ids.length === 0) return out;
+  try {
+    const { data: appts } = await (supabase as any)
+      .from('appointments').select('id, pet_id').in('id', ids);
+    const petIds = Array.from(new Set((appts || []).map((a: any) => a.pet_id).filter(Boolean)));
+    if (petIds.length === 0) return out;
+    const { data: petRows } = await (supabase as any)
+      .from('pets').select('id, name, photo_url').in('id', petIds);
+    const byId: Record<string, any> = {};
+    (petRows || []).forEach((p: any) => { byId[p.id] = p; });
+    (appts || []).forEach((a: any) => {
+      const p = byId[a.pet_id];
+      if (p) out[a.id] = { name: p.name, photo_url: p.photo_url };
+    });
+  } catch {
+    /* keep the status icon */
+  }
+  return out;
+}
+
+/* Fallback when the appointment lookup finds no pet (for example the
+   appointment was moved or closed out, or the row can't be read): match
+   one of the owner's own pets by the name written in the message, such as
+   "...appointment for Marshall (Vaccination...) is complete". Longest
+   names are tried first, so "Sky" can't win over "Skyler". */
+function matchPetByName(message: string | null | undefined, pets: PetInfo[]): PetInfo | undefined {
+  const m = (message ?? '').trim();
+  if (!m) return undefined;
+  const named = pets.filter(p => p.name && p.name.trim()).sort((a, b) => b.name!.length - a.name!.length);
+  return named.find(p => {
+    const escaped = p.name!.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return new RegExp(`(^|[^\\p{L}\\p{N}])${escaped}($|[^\\p{L}\\p{N}])`, 'iu').test(m);
+  });
+}
+
+const initialOf = (name?: string | null) => (name?.trim()?.[0] || '?').toUpperCase();
+
+/* Round photo inside a navy ring, the same as on My Pets. Falls back to
+   the pet's initial if the photo is missing or can't load. */
+function PetAvatar({ uri, name, size }: { uri?: string | null; name?: string | null; size: number }) {
+  const [failedUri, setFailedUri] = useState<string | null>(null);
+  const inner = size + 6;
+  const outer = size + 12;
+  return (
+    <View
+      style={{
+        width: outer, height: outer, borderRadius: outer / 2,
+        borderWidth: 3, borderColor: colors.primary,
+        alignItems: 'center', justifyContent: 'center',
+      }}
+    >
+      <View
+        style={{
+          width: inner, height: inner, borderRadius: inner / 2,
+          borderWidth: 3, borderColor: colors.card,
+          alignItems: 'center', justifyContent: 'center', overflow: 'hidden',
+        }}
+      >
+        {uri && uri !== failedUri ? (
+          <Image
+            source={{ uri }}
+            style={{ width: size, height: size, borderRadius: size / 2 }}
+            accessibilityLabel={`${name || 'Pet'} photo`}
+            onError={() => setFailedUri(uri)}
+          />
+        ) : (
+          <View style={[styles.avatarFallback, { width: size, height: size, borderRadius: size / 2 }]}>
+            <Text style={[styles.avatarInitial, { fontSize: size * 0.4 }]}>{initialOf(name)}</Text>
+          </View>
+        )}
+      </View>
+    </View>
+  );
+}
+
 export default function NotificationsScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
@@ -79,6 +190,9 @@ export default function NotificationsScreen() {
   const [tab, setTab] = useState<TabKey>('all');
   const [openingId, setOpeningId] = useState<string | null>(null);
   const [showUndo, setShowUndo] = useState(false);
+  const [ownerPets, setOwnerPets] = useState<PetInfo[]>([]);
+  const [petByAppt, setPetByAppt] = useState<Record<string, PetInfo>>({});
+  const askedPets = useRef<Set<string>>(new Set());
 
   /* A deleted row is hidden at once but only removed from the database
      after UNDO_MS, so Undo can bring it back. */
@@ -90,6 +204,28 @@ export default function NotificationsScreen() {
     clearTimeout(pending.current.timer);
     deleteNotification(pending.current.item.id);
     pending.current = null;
+  };
+
+  // Fetches pet photos for rows not looked up yet. Never blocks or breaks the list.
+  const loadPetPhotos = async (rows: AppNotification[]) => {
+    const ids = rows
+      .map(n => n.related_id as string | null)
+      .filter((id): id is string => !!id && !askedPets.current.has(id));
+    if (ids.length === 0) return;
+    ids.forEach(id => askedPets.current.add(id));
+    const found = await loadPetsForAppointments(ids);
+    if (Object.keys(found).length > 0) setPetByAppt(prev => ({ ...prev, ...found }));
+    // Not found (offline, or not allowed): let the next refresh try again.
+    ids.forEach(id => { if (!found[id]) askedPets.current.delete(id); });
+  };
+
+  const loadOwnerPets = async (userId: string) => {
+    try {
+      const { data } = await (supabase as any).from('pets').select('name, photo_url').eq('owner_id', userId);
+      if (data) setOwnerPets(data);
+    } catch {
+      /* the name match is only a fallback */
+    }
   };
 
   const fetchNotifications = async () => {
@@ -111,6 +247,8 @@ export default function NotificationsScreen() {
     if (data) {
       const hiddenId = pending.current?.item.id;
       setNotifications(hiddenId ? data.filter((n: AppNotification) => n.id !== hiddenId) : data);
+      loadPetPhotos(data);
+      loadOwnerPets(user.id);
     }
     setIsLoading(false);
     setRefreshing(false);
@@ -132,6 +270,7 @@ export default function NotificationsScreen() {
     if (!row) return;
     if (row.id === pending.current?.item.id) return; // waiting to be deleted
     if ((row as any).type !== 'appointment') return; // this screen lists visit updates only
+    loadPetPhotos([row]);
 
     setNotifications(prev => {
       const exists = prev.some(n => n.id === row.id);
@@ -225,30 +364,46 @@ export default function NotificationsScreen() {
 
   const handleMore = (item: AppNotification) => setMenuItem(item);
 
-  // ── Open the appointment where it lives (History or Upcoming) ──
+  /* ── Open the appointment where it lives ──
+     Confirmed (or anything still ahead)  → Visits > Upcoming
+     Completed / cancelled / no-show      → Visits > History
+
+     The tab comes from the appointment's real status. If that can't be
+     read (offline, or the appointment was deleted), it falls back to what
+     the notification itself says, so a "completed" notification never
+     lands on Upcoming just because the lookup failed.
+
+     The appointment id is used whenever the notification has one, no
+     matter what related_type says: this screen only lists appointment
+     notifications. navigate (not push) is used because Visits is a tab:
+     it opens that tab instead of stacking a second copy of it. */
   const openAppointment = async (item: AppNotification) => {
     if (openingId) return;
     if (!item.is_read) handleMarkAsRead(item.id);
 
-    if (item.related_type !== 'appointment' || !item.related_id) {
-      router.push('/(tabs)/appointments' as any);
+    const kind = kindOf(item);
+    const fallbackTab: 'upcoming' | 'history' =
+      kind === 'completed' || kind === 'cancelled' ? 'history' : 'upcoming';
+
+    if (!item.related_id) {
+      router.navigate({ pathname: VISITS_ROUTE, params: { tab: fallbackTab } } as any);
       return;
     }
 
     setOpeningId(item.id);
-    let visitsTab: 'upcoming' | 'history' = 'upcoming';
+    let visitsTab: 'upcoming' | 'history' = fallbackTab;
     try {
       const appt = await fetchAppointmentById(item.related_id);
-      if (appt && HISTORY_STATUSES.includes(String(appt.status ?? '').toLowerCase())) {
-        visitsTab = 'history';
+      if (appt && appt.status != null) {
+        visitsTab = isHistoryStatus(appt.status) ? 'history' : 'upcoming';
       }
     } catch {
-      /* fall back to Upcoming */
+      /* keep the fallback tab */
     }
     setOpeningId(null);
 
-    router.push({
-      pathname: '/(tabs)/appointments',
+    router.navigate({
+      pathname: VISITS_ROUTE,
       params: { appointmentId: item.related_id, tab: visitsTab },
     } as any);
   };
@@ -310,7 +465,7 @@ export default function NotificationsScreen() {
                 <View style={styles.dateHeader}>
                   <Text style={styles.dateTitle}>{group}</Text>
                   <View style={styles.countPill}>
-                    <Text style={styles.countText}>{items.length}</Text>
+                    <Text style={styles.countText} maxFontSizeMultiplier={1.3}>{items.length}</Text>
                   </View>
                   {groupIndex === 0 && unreadCount > 0 && (
                     <TouchableOpacity
@@ -325,15 +480,24 @@ export default function NotificationsScreen() {
                   )}
                 </View>
 
-                {items.map(item => (
-                  <NotificationRow
-                    key={item.id}
-                    item={item}
-                    onOpen={openAppointment}
-                    onDelete={handleDelete}
-                    onMore={handleMore}
-                  />
-                ))}
+                {/* One rounded card per day; the rows inside are separated by hairlines. */}
+                <View style={styles.group}>
+                  {items.map((item, i) => (
+                    <NotificationRow
+                      key={item.id}
+                      item={item}
+                      first={i === 0}
+                      opening={openingId === item.id}
+                      pet={
+                        (item.related_id ? petByAppt[item.related_id as string] : undefined)
+                        ?? matchPetByName(item.message, ownerPets)
+                      }
+                      onOpen={openAppointment}
+                      onDelete={handleDelete}
+                      onMore={handleMore}
+                    />
+                  ))}
+                </View>
               </View>
             ))
           )}
@@ -388,13 +552,18 @@ export default function NotificationsScreen() {
   );
 }
 
-/* One compact row: a bold title with an unread dot, the message
-   with a short time at its end, a dot when unread, and a ⋯ menu.
-   Swipe left to reveal Delete. */
+/* One row: a status icon, the title and the full message (never cut off,
+   they wrap to as many lines as they need), the time, and a ⋯ menu.
+   Unread rows are tinted and show a dot before the time. Swipe left to
+   reveal Delete. Tapping the row opens the appointment (see
+   openAppointment). */
 function NotificationRow({
-  item, onOpen, onDelete, onMore,
+  item, first, opening, pet, onOpen, onDelete, onMore,
 }: {
   item: AppNotification;
+  first: boolean;
+  opening: boolean;
+  pet?: PetInfo;
   onOpen: (n: AppNotification) => void;
   onDelete: (n: AppNotification) => void;
   onMore: (n: AppNotification) => void;
@@ -419,22 +588,33 @@ function NotificationRow({
       )}
     >
       <TouchableOpacity
-        style={[styles.row, isUnread && styles.rowUnread]}
+        style={[
+          styles.row,
+          isUnread ? styles.rowUnread : styles.rowRead,
+          !first && styles.rowDivider,
+          opening && styles.rowOpening,
+        ]}
         onPress={() => onOpen(item)}
         activeOpacity={0.8}
         accessibilityRole="button"
-        accessibilityLabel={`${isUnread ? 'Unread. ' : ''}${item.title}. ${item.message}`}
+        accessibilityLabel={`${isUnread ? 'Unread. ' : ''}${item.title}. ${item.message}. ${timeAgo(item.created_at)}`}
         accessibilityActions={[{ name: 'delete', label: 'Delete notification' }]}
         onAccessibilityAction={e => { if (e.nativeEvent.actionName === 'delete') onDelete(item); }}
       >
+        <View style={styles.avatarWrap}>
+          {/* The pet's photo; without one, its initial (or P for Pet Royale if the pet isn't known). */}
+          <PetAvatar uri={pet?.photo_url} name={pet?.name ?? 'Pet Royale'} size={AVATAR - 12} />
+        </View>
+
         <View style={styles.rowBody}>
-          <View style={styles.titleRow}>
+          <Text style={[styles.rowTitle, !isUnread && styles.rowTitleRead]}>{item.title}</Text>
+          <Text style={styles.rowMessage}>{item.message}</Text>
+          <View style={styles.timeRow}>
             {isUnread && <View style={styles.unreadDot} />}
-            <Text style={styles.rowTitle} numberOfLines={1}>{item.title}</Text>
+            <Text style={[styles.rowTime, isUnread && styles.rowTimeUnread]} maxFontSizeMultiplier={1.3}>
+              {timeAgo(item.created_at)}
+            </Text>
           </View>
-          <Text style={styles.rowMessage} numberOfLines={3}>
-            {item.message} <Text style={styles.rowTime}>{shortTime(item.created_at)}</Text>
-          </Text>
         </View>
 
         <TouchableOpacity
@@ -444,7 +624,7 @@ function NotificationRow({
           accessibilityRole="button"
           accessibilityLabel="More options"
         >
-          <Ionicons name="ellipsis-horizontal" size={18} color={SUB} />
+          <Ionicons name="ellipsis-horizontal" size={20} color={SUB} />
         </TouchableOpacity>
       </TouchableOpacity>
     </Swipeable>
@@ -466,19 +646,26 @@ function NotificationsSkeleton() {
             <Skeleton width={22} height={22} radius={11} />
           </View>
 
-          {Array.from({ length: count }).map((_, i) => (
-            <View key={i} style={styles.row}>
-              <View style={[styles.rowBody, { gap: 6 }]}>
-                <Skeleton width="45%" height={14} />
-                <Skeleton width="90%" height={13} />
+          <View style={styles.group}>
+            {Array.from({ length: count }).map((_, i) => (
+              <View key={i} style={[styles.row, styles.rowRead, i > 0 && styles.rowDivider]}>
+                <Skeleton width={AVATAR} height={AVATAR} radius={AVATAR / 2} />
+                <View style={[styles.rowBody, { gap: 6 }]}>
+                  <Skeleton width="50%" height={14} />
+                  <Skeleton width="90%" height={13} />
+                  <Skeleton width="30%" height={11} />
+                </View>
               </View>
-            </View>
-          ))}
+            ))}
+          </View>
         </View>
       ))}
     </View>
   );
 }
+
+const AVATAR = 48;
+const CONTROL_H = 44;
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: BG },
@@ -491,8 +678,8 @@ const styles = StyleSheet.create({
     borderBottomColor: BORDER,
     backgroundColor: BG,
   },
-  markAllText: { ...text.smallBold, color: INK },
-  markAllRow: { marginLeft: 'auto' },
+  markAllText: { ...text.smallBold, color: colors.primary },
+  markAllRow: { marginLeft: 'auto', minHeight: CONTROL_H, justifyContent: 'center' },
 
   countPill: {
     minWidth: 22, height: 22, paddingHorizontal: 6, borderRadius: 11,
@@ -500,33 +687,51 @@ const styles = StyleSheet.create({
   },
   countText: { ...text.caption, fontSize: 12, color: INK },
 
-  /* list: rows run edge to edge; section headers carry the side padding */
+  /* list: one rounded card per day, side margins match the header */
   scrollContent: { paddingTop: space.sm, paddingBottom: TAB_BAR_CLEARANCE },
   dateSection: { marginBottom: space.md },
   dateHeader: {
     flexDirection: 'row', alignItems: 'center', gap: space.sm,
     paddingHorizontal: space.xl, paddingTop: space.md, paddingBottom: space.sm,
   },
-  dateTitle: { ...text.bodyBold, fontSize: 14, color: SUB },
+  dateTitle: { ...text.bodyBold, fontSize: 16, color: INK },
+  group: {
+    marginHorizontal: space.lg,
+    backgroundColor: colors.card,
+    borderWidth: 1,
+    borderColor: colors.cardBorder,
+    borderRadius: 24,
+    overflow: 'hidden',
+  },
 
-  /* row */
+  /* row: unread is white, read sits on the card colour, as on your other lists. */
   row: {
     flexDirection: 'row',
-    alignItems: 'center',
+    alignItems: 'flex-start',
     gap: space.md,
-    paddingLeft: space.xl,
-    paddingRight: space.md,
+    paddingLeft: space.md + 2,
+    paddingRight: space.xs,
     paddingVertical: space.md,
-    backgroundColor: BG,
   },
   rowUnread: { backgroundColor: colors.white },
+  rowRead: { backgroundColor: colors.card },
+  rowDivider: { borderTopWidth: 1, borderTopColor: colors.cardBorder },
+  rowOpening: { opacity: 0.6 },
+  avatarWrap: { width: AVATAR, height: AVATAR },
+  avatarFallback: { backgroundColor: colors.primary, alignItems: 'center', justifyContent: 'center' },
+  avatarInitial: { fontFamily: text.display.fontFamily, color: colors.accent },
   rowBody: { flex: 1, minWidth: 0 },
-  titleRow: { flexDirection: 'row', alignItems: 'center', gap: space.sm },
-  rowTitle: { fontFamily: fonts.bodyBold, fontSize: 14, lineHeight: 20, color: INK },
-  rowMessage: { ...text.body, fontSize: 14, lineHeight: 19, color: INK },
-  rowTime: { color: SUB },
+  rowTitle: { fontFamily: fonts.bodyBold, fontSize: 16, lineHeight: 22, color: INK },
+  rowTitleRead: { fontFamily: fonts.bodyMedium },
+  rowMessage: { ...text.body, fontSize: 15, lineHeight: 21, color: INK, marginTop: 2 },
+  timeRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 4 },
+  rowTime: { fontFamily: fonts.body, fontSize: 13, lineHeight: 18, color: SUB },
+  rowTimeUnread: { fontFamily: fonts.bodyBold, color: colors.primary },
   unreadDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: colors.primary },
-  moreBtn: { padding: 6 },
+  moreBtn: {
+    width: CONTROL_H, height: CONTROL_H, marginTop: -6,
+    alignItems: 'center', justifyContent: 'center',
+  },
 
   /* ⋯ menu sheet */
   sheetOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.45)', justifyContent: 'flex-end' },
