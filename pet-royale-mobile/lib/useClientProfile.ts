@@ -13,6 +13,11 @@ export const tidy = (value: string) => value.trim().replace(/\s+/g, ' ');
  * auth metadata and used whenever they agree with clients.name. If they
  * don't (the clinic edited the name, or an older account), clients.name
  * wins and is split on the first space.
+ *
+ * Address and Messenger work the same way: clients.address and
+ * clients.fb_messenger win, and the values saved at sign-up (auth metadata)
+ * fill in when the clients row has none. They are read in their own query,
+ * so if those columns are ever missing, name and phone still load.
  */
 export function useClientProfile() {
   const [user, setUser] = useState<any>(null);
@@ -21,6 +26,8 @@ export function useClientProfile() {
   const [lastName, setLastName] = useState('');
   const [countryIso, setCountryIso] = useState(DEFAULT_ISO);
   const [national, setNational] = useState('');
+  const [address, setAddress] = useState('');
+  const [messenger, setMessenger] = useState('');
   const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
   const [isVerified, setIsVerified] = useState(false);
 
@@ -38,6 +45,12 @@ export function useClientProfile() {
         const { data: client } = await (supabase as any)
           .from('clients')
           .select('name, phone')
+          .eq('id', user.id)
+          .maybeSingle();
+
+        const { data: extra } = await (supabase as any)
+          .from('clients')
+          .select('address, fb_messenger')
           .eq('id', user.id)
           .maybeSingle();
 
@@ -69,6 +82,8 @@ export function useClientProfile() {
         setLastName(ln);
         setCountryIso(parsed.iso);
         setNational(parsed.national);
+        setAddress(tidy(extra?.address || meta.address || ''));
+        setMessenger(tidy(extra?.fb_messenger || meta.fb_messenger || ''));
         setIsLoading(false);
       })();
 
@@ -76,5 +91,8 @@ export function useClientProfile() {
     }, [])
   );
 
-  return { user, isLoading, firstName, lastName, countryIso, national, avatarUrl, isVerified };
+  return {
+    user, isLoading, firstName, lastName, countryIso, national,
+    address, messenger, avatarUrl, isVerified,
+  };
 }

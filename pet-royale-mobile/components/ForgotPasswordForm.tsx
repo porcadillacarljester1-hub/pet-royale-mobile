@@ -12,7 +12,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { supabase } from '../lib/supabase';
 import { Eye, EyeOff, Check, ShieldCheck, ArrowRight } from 'lucide-react-native';
-import FloatField from './FloatField';
+import AuthInput from './AuthInput';
 import { BUTTON_H, type AuthCtx } from './AuthShell';
 import { colors, text, fonts, space, radius, shadow, hitSlop } from '../constants/theme';
 
@@ -417,8 +417,9 @@ export default function ForgotPasswordForm({
 
         <View style={styles.form}>
           {step === 'email' && (
-            <FloatField
+            <AuthInput
               label="Email address"
+              placeholder="you@example.com"
               value={email}
               focused={focused === 'email'}
               inputRef={emailRef}
@@ -488,8 +489,9 @@ export default function ForgotPasswordForm({
 
           {step === 'password' && (
             <>
-              <FloatField
+              <AuthInput
                 label="New password"
+                placeholder="At least 12 characters"
                 value={password}
                 focused={focused === 'password'}
                 inputRef={passwordRef}
@@ -520,8 +522,9 @@ export default function ForgotPasswordForm({
                 })}
               </View>
 
-              <FloatField
+              <AuthInput
                 label="Confirm new password"
+                placeholder="Re-enter your new password"
                 value={confirmPassword}
                 focused={focused === 'confirm'}
                 inputRef={confirmRef}

@@ -18,7 +18,7 @@ import { PhotoCropper } from '../../components/PhotoCropper';
 import { useRealtimeRefresh } from '@/lib/useRealtimeRefresh';
 
 const genderOptions = ['Male', 'Female'];
-const neuteredOptions = ['Yes', 'No', 'Unknown'];
+const neuteredOptions = ['Yes', 'No'];
 
 const STEPS = [
   { key: 1, label: 'Identity' },

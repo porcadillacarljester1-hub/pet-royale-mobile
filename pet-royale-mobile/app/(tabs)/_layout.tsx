@@ -7,6 +7,7 @@ import {
   Pressable,
   Platform,
   StyleSheet,
+  AppState,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { BottomTabBarProps } from '@react-navigation/bottom-tabs';
@@ -105,6 +106,23 @@ function FloatingTabBar({ state, navigation }: BottomTabBarProps) {
       KeyboardEvents.addListener('keyboardDidHide', () => setKeyboardOpen(false)),
     ];
     return () => subs.forEach((s) => s.remove());
+  }, []);
+
+  /* A missed keyboard-hide event must never leave the bar hidden. The flag
+     is cleared whenever the visible tab changes and whenever the app comes
+     back to the foreground. If the keyboard really is open, the next
+     show event sets it again. */
+  const activeRoute = state.routes[state.index]?.name;
+  const [lastRoute, setLastRoute] = useState(activeRoute);
+  if (lastRoute !== activeRoute) {
+    setLastRoute(activeRoute);
+    setKeyboardOpen(false);
+  }
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', (s) => {
+      if (s === 'active') setKeyboardOpen(false);
+    });
+    return () => sub.remove();
   }, []);
 
   if (keyboardOpen && HIDE_TAB_BAR_ON_KEYBOARD.has(state.routes[state.index]?.name)) return null;

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type ComponentProps, type RefObject } from 'react';
 import {
   View,
   Text,
@@ -11,24 +11,18 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { supabase } from '../lib/supabase';
 import { Eye, EyeOff, Check } from 'lucide-react-native';
-import FloatField from './FloatField';
 import { BUTTON_H, type AuthCtx } from './AuthShell';
 import { colors, status, text, fonts, space, radius, shadow } from '../constants/theme';
 import { PhoneInput } from './PhoneInput';
 import { DEFAULT_ISO, getCountry, isValidMobile, toE164 } from '../lib/phone';
 
-const TOTAL_STEPS = 4;
+const TOTAL_STEPS = 6;
 const PASSWORD_MAX = 72;
 
-/* A symbol is an ASCII punctuation character. The old test (anything
-   that isn't a letter, digit or space) counted accented letters like é
-   and ñ as symbols, so "Pañuelo1234" passed without a real symbol. */
+/* A symbol is an ASCII punctuation character. Accented letters such as é
+   and ñ do not count as symbols. */
 const SYMBOL_RE = /[!-\/:-@\[-`{-~]/;
 
-/* Checked live as the person types, and again at submit. 12 to 72
-   characters with an uppercase letter, a lowercase letter, a number and
-   a symbol. A space is not a symbol, and the 72 limit is the most the
-   auth system actually uses — anything past it is silently ignored. */
 const PASSWORD_RULES: { id: string; label: string; test: (v: string) => boolean }[] = [
   { id: 'length', label: 'At least 12 characters', test: (v) => v.length >= 12 && v.length <= PASSWORD_MAX },
   { id: 'upper', label: 'One uppercase letter', test: (v) => /[A-Z]/.test(v) },
@@ -39,9 +33,8 @@ const PASSWORD_RULES: { id: string; label: string; test: (v: string) => boolean 
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
-/* A name: at least 2 characters, at least one of them a letter, and no
-   digits or symbols. Hyphens, apostrophes, periods and spaces are fine
-   (Anne-Marie, O'Brien, Jr.). Letters of any script pass. */
+/* A name: at least 2 characters, at least one letter, and no digits or
+   symbols. Hyphens, apostrophes, periods and spaces are fine. */
 const NAME_BAD_RE = /[0-9_!@#$%^&*()+=\[\]{}<>\/\\|~`?,;:"]/;
 const NAME_HAS_LETTER_RE = /[^\s0-9.'\u2019-]/;
 
@@ -50,12 +43,20 @@ function isValidName(value: string): boolean {
   return v.length >= 2 && !NAME_BAD_RE.test(v) && NAME_HAS_LETTER_RE.test(v);
 }
 
+/* Address: at least 8 characters including a letter (street, barangay, city). */
+const isValidAddress = (value: string) => value.trim().length >= 8 && /[A-Za-z]/.test(value);
+
+/* Messenger: the clinic's way to reach the owner, so it is required. */
+const isValidMessenger = (value: string) => value.trim().length >= 2;
+
 const tidy = (value: string) => value.trim().replace(/\s+/g, ' ');
 
 const STEP_HELP = [
   'The name you\u2019d like the clinic to see on your appointments.',
   'We\u2019ll send a confirmation link here, and you\u2019ll sign in with this address.',
   'A mobile number, so the clinic can reach you about your appointments.',
+  'Your street, barangay and city. We use it for records and pet pick-up.',
+  'The name or link we can message you on, so the clinic can contact you.',
   'You\u2019ll sign in with this. Use one you don\u2019t use anywhere else.',
 ];
 
@@ -63,8 +64,32 @@ const PROMPTS = [
   'What should we call you?',
   'What\u2019s your email?',
   'Best number to reach you?',
+  'Where do you live?',
+  'Your Facebook Messenger?',
   'Set a password',
 ];
+
+/* A plain text field. No floating label: the question above it says what
+   it is, and the placeholder says what to type. */
+type InputProps = ComponentProps<typeof TextInput> & {
+  inputRef?: RefObject<TextInput | null>;
+  focused: boolean;
+  /** Title shown above the box. The placeholder is the hint inside it. */
+  label?: string;
+};
+function Input({ inputRef, focused, label, style, ...rest }: InputProps) {
+  return (
+    <View style={styles.field}>
+      {label ? <Text style={styles.fieldLabel}>{label}</Text> : null}
+      <TextInput
+        ref={inputRef}
+        placeholderTextColor={colors.mutedFg}
+        style={[styles.input, focused && styles.inputFocused, style]}
+        {...rest}
+      />
+    </View>
+  );
+}
 
 function ProgressBar({ step, compact }: { step: number; compact?: boolean }) {
   return (
@@ -93,11 +118,10 @@ export default function RegisterForm({
   editEmailNonce,
 }: {
   auth: AuthCtx;
-  /** Sign-up worked and a confirmation email was sent. The screen shows
-      the "Check your email" page over this form. */
+  /** Sign-up worked and a confirmation email was sent. */
   onCheckEmail: (email: string) => void;
-  /** Goes up by one each time the person taps "Use a different email" on
-      that page; this form then returns to the email step, keeping the rest. */
+  /** Goes up by one when the person taps "Use a different email" on the
+      Check your email page; the form returns to the email step. */
   editEmailNonce: number;
 }) {
   const insets = useSafeAreaInsets();
@@ -109,19 +133,17 @@ export default function RegisterForm({
   const [email, setEmail] = useState('');
   const [countryIso, setCountryIso] = useState(DEFAULT_ISO);
   const [national, setNational] = useState('');
+  const [address, setAddress] = useState('');
+  const [messenger, setMessenger] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
-  /* Which field has focus. Each floating-label field needs to know
-     whether it is the focused one, and the hints below only need to
-     know whether any field is. */
+  /* Which field has focus, so the focused field can be highlighted and
+     hints wait until the person leaves the field. */
   const [focusedField, setFocusedField] = useState<string | null>(null);
   const fieldFocused = focusedField !== null;
 
-  /* Only one step is ever on screen at a time, so a single ref covers
-     whichever field is currently the main one. The last-name field
-     has its own, so Enter on first name can move to it. */
   const inputRef = useRef<TextInput>(null);
   const lastNameRef = useRef<TextInput>(null);
 
@@ -132,15 +154,9 @@ export default function RegisterForm({
   const [errorShake] = useState(() => new Animated.Value(0));
   const [btnScale] = useState(() => new Animated.Value(1));
 
-  /* ── Step changes ── */
-  // Set once the person has moved between steps. Until then, arriving on
-  // step 1 should not pop the keyboard open (see the focus effect).
-  const moved = useRef(false);
+  const [moved, setMoved] = useState(false);
 
-  /* The step's entrance replays when the step changes. It does not play
-     when this form first appears: the shell's fade already covers that,
-     and a second, slower fade on top of it is what made the switch from
-     Sign in noticeable. */
+  /* The step's entrance replays when the step changes. */
   const shownStep = useRef(step);
   useEffect(() => {
     if (shownStep.current === step) return;
@@ -153,45 +169,42 @@ export default function RegisterForm({
     ]).start();
   }, [step, fadeIn, slideIn]);
 
-  /* If the keyboard was already up when this form appeared (the person
-     switched from Sign in while typing), keep it up. */
+  /* If the keyboard was already up when this form appeared, keep it up. */
   const [startFocused] = useState(auth.kbOpen);
 
-  /* Focus the field on every step. The delay roughly clears the step's
-     own entrance animation so focus doesn't fight it.
-
-     On the very first step this is skipped unless the keyboard was already
-     open. Opening the keyboard on arrival collapses the hero card, which is
-     a second visible jump right after switching from Sign in. */
+  /* Focus the field on each step. On the first step, skip this unless the
+     keyboard was already open, so arriving does not collapse the hero. */
   useEffect(() => {
-    if (step === 0 && !startFocused && !moved.current) return;
+    if (step === 0 && !startFocused && !moved) return;
     const t = setTimeout(() => inputRef.current?.focus(), step === 0 ? 80 : 260);
     return () => clearTimeout(t);
-  }, [step, startFocused]);
+  }, [step, startFocused, moved]);
 
-  /* "Use a different email" on the Check your email page: back to the
-     email step with everything else kept. */
+  /* "Use a different email" on the Check your email page. The nonce is
+     compared during render and the state is updated there, which avoids
+     calling setState inside an effect. */
+  const [seenNonce, setSeenNonce] = useState(editEmailNonce);
+  if (editEmailNonce !== seenNonce) {
+    setSeenNonce(editEmailNonce);
+    if (editEmailNonce !== 0) {
+      setMoved(true);
+      setError('');
+      setStep(1);
+    }
+  }
+
+  /* The back button lives in the shell. On later steps it goes back a step.
+     Defined inside the effect, so no memoised callback is needed. */
   useEffect(() => {
-    if (editEmailNonce === 0) return;
-    moved.current = true;
-    setError('');
-    setStep(1);
-  }, [editEmailNonce]);
-
-  /* The back button lives in the shell. On steps after the first it should
-     go to the previous step rather than leave the screen. */
-  const stepBack = useCallback((): boolean => {
-    if (step === 0) return false;
-    moved.current = true;
-    setError('');
-    setStep((s) => s - 1);
-    return true;
-  }, [step]);
-
-  useEffect(() => {
-    setBackHandler(stepBack);
+    setBackHandler(() => {
+      if (step === 0) return false;
+      setMoved(true);
+      setError('');
+      setStep((s) => s - 1);
+      return true;
+    });
     return () => setBackHandler(null);
-  }, [setBackHandler, stepBack]);
+  }, [setBackHandler, step]);
 
   const shake = () => {
     errorShake.setValue(0);
@@ -215,21 +228,22 @@ export default function RegisterForm({
       if (error) setError('');
     };
 
-  /* Both names are required and both must look like a name. */
   const namesOk = isValidName(firstName) && isValidName(lastName);
   const phoneOk = isValidMobile(country, national);
+  const addressOk = isValidAddress(address);
+  const messengerOk = isValidMessenger(messenger);
 
-  /* Whether the field on the CURRENT step is fillable — gates the
-     Next / Create account button. */
+  /* Whether the field on the current step is complete. Gates the button. */
   const stepValid = [
     namesOk,
     EMAIL_RE.test(email.trim()),
     phoneOk,
+    addressOk,
+    messengerOk,
     PASSWORD_RULES.every((rule) => rule.test(password)),
   ][step];
 
-  /* Said only once the person has typed something and left the field —
-     nagging while they're still typing is worse than saying nothing. */
+  /* Hints appear only after the person leaves the field. */
   let hint = '';
   if (!fieldFocused) {
     if (step === 0 && (firstName.trim() !== '' || lastName.trim() !== '') && !namesOk) {
@@ -243,13 +257,17 @@ export default function RegisterForm({
       hint = 'Enter a valid email address.';
     } else if (step === 2 && national.length > 0 && !phoneOk) {
       hint = `Enter a valid mobile number for ${country.name}.`;
+    } else if (step === 3 && address.length > 0 && !addressOk) {
+      hint = 'Include your street, barangay and city.';
+    } else if (step === 4 && messenger.length > 0 && !messengerOk) {
+      hint = 'Enter your Messenger name or link.';
     }
   }
 
   const goNext = () => {
     if (!stepValid || isLoading) return;
     if (step < TOTAL_STEPS - 1) {
-      moved.current = true;
+      setMoved(true);
       setError('');
       setStep((s) => s + 1);
     } else {
@@ -263,10 +281,12 @@ export default function RegisterForm({
   const handleRegister = async () => {
     const first = tidy(firstName);
     const last = tidy(lastName);
-    // Defense in depth — stepValid already blocks reaching this with
-    // anything missing, but a real signup shouldn't rely solely on a
-    // button's disabled state having stayed in sync.
-    if (!isValidName(first) || !isValidName(last) || !email.trim() || !phoneOk || !password) {
+    // stepValid already blocks this; the check stays in case the button
+    // and the step ever fall out of sync.
+    if (
+      !isValidName(first) || !isValidName(last) || !email.trim() || !phoneOk ||
+      !addressOk || !messengerOk || !password
+    ) {
       setError('Please fill in all fields.');
       shake();
       return;
@@ -287,6 +307,8 @@ export default function RegisterForm({
           first_name: first,
           last_name: last,
           phone: toE164(country, national),
+          address: tidy(address),
+          fb_messenger: messenger.trim(),
         },
       },
     });
@@ -300,23 +322,16 @@ export default function RegisterForm({
       shake();
       return;
     }
-    /* With email confirmation on, Supabase does not return an error for
-       an address that is already registered (that would reveal which
-       emails have accounts). It returns a user with no identities and
-       no session. Without this check that case fell through to "Check
-       your email" for a message that was never sent. */
+    /* An address that is already registered returns a user with no
+       identities and no session, without an error. */
     if (data.user && Array.isArray(data.user.identities) && data.user.identities.length === 0) {
       setError('An account already exists for that email. Try signing in instead.');
       shake();
       return;
     }
     if (data.session) {
-      // signUp() hands back an active session immediately whenever this
-      // Supabase project has email confirmation turned off — left as
-      // it was, that sent every new account straight into Home instead
-      // of sign-in. Signing back out here is what makes registration
-      // land on sign-in either way, matching the check-your-email path
-      // below for projects where confirmation IS required.
+      // Email confirmation is off for this project. Sign out so that
+      // registration still lands on sign-in.
       await supabase.auth.signOut();
       switchTo('signin');
     } else {
@@ -336,21 +351,19 @@ export default function RegisterForm({
       <ProgressBar step={step} compact={kbOpen} />
 
       <Animated.View
-        style={[
-          styles.stepContent,
-          { opacity: fadeIn, transform: [{ translateY: slideIn }] },
-        ]}
+        style={[styles.stepContent, { opacity: fadeIn, transform: [{ translateY: slideIn }] }]}
       >
         <Text style={styles.stepPrompt}>{PROMPTS[step]}</Text>
         <Text style={[styles.stepHelp, kbOpen && styles.stepHelpCompact]}>{STEP_HELP[step]}</Text>
 
         {step === 0 && (
           <View style={styles.fields}>
-            <FloatField
-              label="First name"
-              value={firstName}
-              focused={focusedField === 'first'}
+            <Input
               inputRef={inputRef}
+              focused={focusedField === 'first'}
+              label="First name"
+              placeholder="e.g. Juan"
+              value={firstName}
               onChangeText={clear(setFirstName)}
               onFocus={() => setFocusedField('first')}
               onBlur={() => setFocusedField(null)}
@@ -361,11 +374,12 @@ export default function RegisterForm({
               blurOnSubmit={false}
               onSubmitEditing={() => lastNameRef.current?.focus()}
             />
-            <FloatField
-              label="Last name"
-              value={lastName}
-              focused={focusedField === 'last'}
+            <Input
               inputRef={lastNameRef}
+              focused={focusedField === 'last'}
+              label="Last name"
+              placeholder="e.g. Dela Cruz"
+              value={lastName}
               onChangeText={clear(setLastName)}
               onFocus={() => { setFocusedField('last'); auth.scrollToBottomSoon(); }}
               onBlur={() => setFocusedField(null)}
@@ -379,11 +393,12 @@ export default function RegisterForm({
         )}
 
         {step === 1 && (
-          <FloatField
-            label="Email address"
-            value={email}
-            focused={focusedField === 'email'}
+          <Input
             inputRef={inputRef}
+            focused={focusedField === 'email'}
+              label="Email address"
+            placeholder="you@example.com"
+            value={email}
             onChangeText={clear(setEmail)}
             onFocus={() => setFocusedField('email')}
             onBlur={() => setFocusedField(null)}
@@ -398,6 +413,8 @@ export default function RegisterForm({
         )}
 
         {step === 2 && (
+          <View style={styles.field}>
+          <Text style={styles.fieldLabel}>Mobile number</Text>
           <PhoneInput
             iso={countryIso}
             national={national}
@@ -414,40 +431,78 @@ export default function RegisterForm({
             onBlur={() => setFocusedField(null)}
             onSubmitEditing={goNext}
           />
+          </View>
         )}
 
         {step === 3 && (
+          <Input
+            inputRef={inputRef}
+            focused={focusedField === 'address'}
+              label="Address"
+            placeholder="Street, barangay, city"
+            value={address}
+            onChangeText={clear(setAddress)}
+            onFocus={() => { setFocusedField('address'); auth.scrollToBottomSoon(); }}
+            onBlur={() => setFocusedField(null)}
+            autoCapitalize="words"
+            autoComplete="street-address"
+            textContentType="fullStreetAddress"
+            returnKeyType="next"
+            onSubmitEditing={goNext}
+          />
+        )}
+
+        {step === 4 && (
+          <Input
+            inputRef={inputRef}
+            focused={focusedField === 'messenger'}
+              label="Messenger"
+            placeholder="Name or link"
+            value={messenger}
+            onChangeText={clear(setMessenger)}
+            onFocus={() => { setFocusedField('messenger'); auth.scrollToBottomSoon(); }}
+            onBlur={() => setFocusedField(null)}
+            autoCapitalize="none"
+            autoCorrect={false}
+            returnKeyType="next"
+            onSubmitEditing={goNext}
+          />
+        )}
+
+        {step === 5 && (
           <>
-            <FloatField
-              label="Password"
-              value={password}
-              focused={focusedField === 'password'}
-              inputRef={inputRef}
-              onChangeText={clear(setPassword)}
-              onFocus={() => { setFocusedField('password'); auth.scrollToBottomSoon(); }}
-              onBlur={() => setFocusedField(null)}
-              secureTextEntry={!showPassword}
-              maxLength={PASSWORD_MAX}
-              autoComplete="new-password"
-              textContentType="newPassword"
-              returnKeyType="go"
-              onSubmitEditing={goNext}
-              right={
-                <TouchableOpacity
-                  style={styles.eyeBtn}
-                  onPress={() => setShowPassword((value) => !value)}
-                  activeOpacity={0.7}
-                  accessibilityRole="button"
-                  accessibilityLabel={showPassword ? 'Hide password' : 'Show password'}
-                >
-                  {showPassword ? (
-                    <EyeOff size={20} color={colors.mutedFg} />
-                  ) : (
-                    <Eye size={20} color={colors.mutedFg} />
-                  )}
-                </TouchableOpacity>
-              }
-            />
+            <Text style={styles.fieldLabel}>Password</Text>
+            <View style={styles.pwRow}>
+              <Input
+                inputRef={inputRef}
+                focused={focusedField === 'password'}
+                placeholder="At least 12 characters"
+                value={password}
+                onChangeText={clear(setPassword)}
+                onFocus={() => { setFocusedField('password'); auth.scrollToBottomSoon(); }}
+                onBlur={() => setFocusedField(null)}
+                secureTextEntry={!showPassword}
+                maxLength={PASSWORD_MAX}
+                autoComplete="new-password"
+                textContentType="newPassword"
+                returnKeyType="go"
+                onSubmitEditing={goNext}
+                style={styles.pwInput}
+              />
+              <TouchableOpacity
+                style={styles.eyeBtn}
+                onPress={() => setShowPassword((value) => !value)}
+                activeOpacity={0.7}
+                accessibilityRole="button"
+                accessibilityLabel={showPassword ? 'Hide password' : 'Show password'}
+              >
+                {showPassword ? (
+                  <EyeOff size={20} color={colors.mutedFg} />
+                ) : (
+                  <Eye size={20} color={colors.mutedFg} />
+                )}
+              </TouchableOpacity>
+            </View>
             <View style={[styles.passwordRules, kbOpen && styles.passwordRulesCompact]}>
               {PASSWORD_RULES.map((rule) => {
                 const met = rule.test(password);
@@ -468,8 +523,7 @@ export default function RegisterForm({
           </>
         )}
 
-        {/* A fixed-height slot, so a hint appearing doesn't push the
-            button down under someone's thumb. */}
+        {/* Fixed height, so a hint appearing does not move the button. */}
         <View style={styles.hintSlot}>
           {hint ? (
             <Text style={styles.hintText} accessibilityLiveRegion="polite">
@@ -536,7 +590,6 @@ export default function RegisterForm({
 }
 
 const styles = StyleSheet.create({
-  /* ── Body ── */
   body: {
     flex: 1,
     paddingHorizontal: space.xxl,
@@ -561,14 +614,9 @@ const styles = StyleSheet.create({
     borderRadius: 2,
     backgroundColor: colors.muted,
   },
-  // Steps behind you are navy; the one you're on is gold — the same
-  // "you are here" the admin's active tab underline uses.
   progressDone: { backgroundColor: colors.primary },
   progressCurrent: { backgroundColor: colors.accent },
 
-  // No flex: 1 here. The body fills the screen, so a flexing step
-  // would stretch to fill it and push the button to the very bottom,
-  // far from the field and against the keyboard.
   stepContent: {},
   stepPrompt: {
     fontFamily: fonts.display,
@@ -587,9 +635,37 @@ const styles = StyleSheet.create({
 
   fields: { gap: space.md },
 
+  /* A field is a title above a filled box. The placeholder is the hint. */
+  field: {},
+  fieldLabel: {
+    ...text.small,
+    fontWeight: '600',
+    color: colors.foreground,
+    marginBottom: 8,
+  },
+  input: {
+    ...text.body,
+    height: 58,
+    borderRadius: 18,
+    borderWidth: 1.5,
+    borderColor: 'transparent',
+    backgroundColor: colors.muted,
+    paddingHorizontal: 20,
+    color: colors.foreground,
+  },
+  inputFocused: {
+    borderColor: colors.primary,
+    backgroundColor: '#ffffff',
+  },
+
+  pwRow: { position: 'relative' },
+  pwInput: { paddingRight: 56 },
   eyeBtn: {
-    width: BUTTON_H,
-    height: BUTTON_H,
+    position: 'absolute',
+    right: 14,
+    top: 0,
+    height: 58,
+    width: 44,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -641,7 +717,6 @@ const styles = StyleSheet.create({
     color: colors.destructive,
   },
 
-  /* ── Button: 48px, fully rounded, like sign in ── */
   btnPrimary: {
     height: BUTTON_H,
     borderRadius: BUTTON_H / 2,
@@ -663,8 +738,6 @@ const styles = StyleSheet.create({
     ...text.bodyBold,
     color: colors.primaryFg,
   },
-  // Cream on the muted fill is 1.17:1 — the label vanished. This is the
-  // muted-foreground colour instead.
   btnPrimaryLabelDisabled: {
     color: colors.mutedFg,
   },

@@ -21,6 +21,7 @@ function InfoRow({
   onPress,
   trailing,
   last,
+  multiline,
 }: {
   label: string;
   value?: string;
@@ -28,6 +29,9 @@ function InfoRow({
   onPress?: () => void;
   trailing?: ReactNode;
   last?: boolean;
+  /** Let a long value (an address) wrap to two lines instead of
+      shortening it in the middle. */
+  multiline?: boolean;
 }) {
   const content = (
     <>
@@ -35,8 +39,8 @@ function InfoRow({
         <Text style={styles.rowLabel}>{label}</Text>
         <Text
           style={[styles.rowValue, !value && styles.rowPlaceholder]}
-          numberOfLines={1}
-          ellipsizeMode="middle"
+          numberOfLines={multiline ? 2 : 1}
+          ellipsizeMode={multiline ? 'tail' : 'middle'}
           maxFontSizeMultiplier={1.25}
         >
           {value || placeholder}
@@ -68,7 +72,7 @@ function InfoRow({
 
 export default function AccountScreen() {
   const {
-    user, isLoading, firstName, lastName, countryIso, national, avatarUrl,
+    user, isLoading, firstName, lastName, countryIso, national, address, messenger, avatarUrl,
   } = useClientProfile();
 
   if (isLoading) return <AccountSkeleton />;
@@ -127,6 +131,21 @@ export default function AccountScreen() {
             value={phone}
             placeholder="Add a mobile number"
             onPress={() => router.push('/account-mobile' as any)}
+            trailing={<ChevronRight size={18} color={colors.mutedFg} />}
+          />
+          <InfoRow
+            label="Address"
+            value={address}
+            placeholder="Add your address"
+            multiline
+            onPress={() => router.push('/account-address' as any)}
+            trailing={<ChevronRight size={18} color={colors.mutedFg} />}
+          />
+          <InfoRow
+            label="Messenger"
+            value={messenger}
+            placeholder="Add your Messenger"
+            onPress={() => router.push('/account-messenger' as any)}
             trailing={<ChevronRight size={18} color={colors.mutedFg} />}
           />
           <InfoRow
@@ -227,7 +246,7 @@ function AccountSkeleton() {
         <Skeleton width={96} height={16} style={{ marginTop: space.md }} />
       </View>
       <View style={{ marginHorizontal: space.xxl, gap: space.md }}>
-        {[0, 1, 2].map((i) => (
+        {[0, 1, 2, 3, 4].map((i) => (
           <Skeleton key={i} width="100%" height={64} radius={radius.md} />
         ))}
       </View>

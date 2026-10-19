@@ -2,7 +2,7 @@
   "expo": {
     "name": "Pet Royale",
     "slug": "pet-royale-mobile",
-    "version": "1.0.2",
+    "version": "1.0.3",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "petroyalemobile",
@@ -46,7 +46,7 @@
         "expo-splash-screen",
         {
           "image": "./assets/images/splash-startup.png",
-          "imageWidth": 386,
+          "imageWidth": 200,
           "backgroundColor": "#051F42"
         }
       ],
