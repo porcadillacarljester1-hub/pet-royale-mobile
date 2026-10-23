@@ -47,3 +47,4 @@ app-example
 .env.*
 !.env.example
 expo-log.txt
+google-services.json
