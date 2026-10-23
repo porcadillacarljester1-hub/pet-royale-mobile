@@ -27,9 +27,6 @@ import { toLocalISO, fmtTime, openDays } from '../../lib/format';
 import { useRealtimeRefresh } from '../../lib/useRealtimeRefresh';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-
-/* Used only if a category has no last_slot at all. The real list of times
-   is built from the category's own settings by buildSlots() below. */
 const FALLBACK_LAST_SLOT_MINUTES = 18 * 60 + 30;
 
 function isClosedOn(date: Date, category: any) {
@@ -37,11 +34,6 @@ function isClosedOn(date: Date, category: any) {
   return date.getDay() === Number(category.closed_day ?? 0);
 }
 
-/* Accepts "08:30 AM" (what the app writes) AND "08:30:00" / "14:30"
-   (what Postgres returns if `scheduled_time` is a `time` column, or what
-   an admin-created row may contain). Everything is compared as minutes,
-   never as raw strings — otherwise "08:30 AM" !== "08:30:00" and a taken
-   slot looks free. */
 function slotToMinutes(slot: unknown) {
   const s = String(slot ?? '').trim();
 
@@ -71,8 +63,7 @@ function minutesNow() {
 function timeColumnToMinutes(value: unknown, fallback: number) {
   if (!value) return fallback;
   const [h, m] = String(value).split(':').map(Number);
-  // A malformed value would give NaN, and every comparison against NaN is
-  // false — which silently hides every slot. Fall back instead.
+
   if (!Number.isFinite(h) || !Number.isFinite(m)) return fallback;
   return h * 60 + m;
 }
@@ -88,10 +79,6 @@ function lastSlotMinutes(category: any) {
   );
 }
 
-/* "08:30 AM" — the exact text the app has always saved in
-   appointments.scheduled_time, so the unique index and get_taken_times
-   keep matching. This is the stored value: never change its format.
-   What the person reads on screen goes through disp() below. */
 function slotLabel(min: number) {
   const h24 = Math.floor(min / 60) % 24;
   const m = min % 60;
@@ -99,23 +86,15 @@ function slotLabel(min: number) {
   return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')} ${h24 >= 12 ? 'PM' : 'AM'}`;
 }
 
-/* Display only: "08:30 AM" reads as "8:30 AM". The stored text is
-   untouched. */
 const disp = (slot: string) => slot.replace(/^0(\d)/, '$1');
 
 function minutesToTimeColumn(min: number) {
   return `${String(Math.floor(min / 60) % 24).padStart(2, '0')}:${String(min % 60).padStart(2, '0')}:00`;
 }
 
-/* Minutes an appointment takes, and how far apart start times are.
-   Both come from the clinic's Operating hours settings (migration 041);
-   a row without them behaves as it always did: 30 and 30. */
 const durationMinutes = (c: any) => (Number(c?.duration_minutes) >= 5 ? Number(c.duration_minutes) : 30);
 const stepMinutes = (c: any) => (Number(c?.slot_minutes) >= 5 ? Number(c.slot_minutes) : 30);
 
-/* The break (lunch). Before migration 041 the lunch gap was baked into the
-   old fixed list of times, so a row from an older database keeps 12:00 to
-   1:00 PM. Once the columns exist, null means no break. */
 function breakRange(c: any): [number, number] | null {
   if (!c || !('break_start' in c)) return [12 * 60, 13 * 60];
   if (!c.break_start || !c.break_end) return null;
@@ -124,9 +103,6 @@ function breakRange(c: any): [number, number] | null {
   return bs >= 0 && be > bs ? [bs, be] : null;
 }
 
-/* The start times a service offers: from opening, every slot_minutes, up to
-   the last booking, leaving out any time inside the break or whose
-   appointment would run into it. */
 function buildSlots(category: any): string[] {
   if (!category) return [];
   const first = firstSlotMinutes(category);
@@ -142,14 +118,8 @@ function buildSlots(category: any): string[] {
   return out;
 }
 
-/* When the clinic closes: the last booking plus one appointment. */
 const closesAt = (c: any) => fmtTime(minutesToTimeColumn(lastSlotMinutes(c) + durationMinutes(c)));
 
-/* Taken times for one date, straight from the database.
-   IMPORTANT: this uses the `get_taken_times` RPC (SECURITY DEFINER), not a
-   direct SELECT on `appointments`. A direct SELECT is filtered by Row Level
-   Security to the signed-in owner's OWN rows, so other owners' bookings were
-   invisible and every slot looked free to them. See migration 027. */
 async function fetchTakenTimes(date: string): Promise<{ times: string[]; failed: boolean }> {
   const { data, error } = await (supabase as any).rpc('get_taken_times', { p_date: date });
   if (error) return { times: [], failed: true };
@@ -159,13 +129,8 @@ async function fetchTakenTimes(date: string): Promise<{ times: string[]; failed:
   return { times, failed: false };
 }
 
-/* Content never gets wider than this, so on a tablet the page is a
-   centred column instead of stretched rows. */
 const MAX_CONTENT = 560;
 
-/* Below this width (small and older phones) the side margin tightens and
-   the times go from four columns to three, so every chip keeps its text
-   and a comfortable tap target. */
 const NARROW_WIDTH = 360;
 const SLOT_GAP = 8;
 
@@ -176,8 +141,6 @@ const MONTHS = [
 ];
 const MONTHS_SHORT = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'];
 
-/* The day strip: one pill per day from today, scrolling sideways. A
-   fixed pill width, so it works on any screen. */
 const DAYS_AHEAD = 365;
 const PILL_W = 56;
 const PILL_GAP = 8;
@@ -193,8 +156,6 @@ const shortDate = (iso: string) =>
     weekday: 'short', month: 'short', day: 'numeric',
   });
 
-/* TODAY, TOMORROW or OCT 15, for the date block on the confirmation.
-   Compares calendar days, not hours. */
 function dayLabel(iso: string): string {
   const [y, m, d] = iso.split('-').map(Number);
   const visit = new Date(y, (m || 1) - 1, d || 1);
@@ -206,13 +167,10 @@ function dayLabel(iso: string): string {
   return `${MONTHS_SHORT[(m || 1) - 1]} ${d}`;
 }
 
-/* "Completed" green, same as History in Visits. Falls back to the teal
-   tone if the theme has no success tone. */
 const DONE = (status as any).success ?? status.teal;
 
 const STEP_LABELS = ['Pet', 'Service', 'Date and time', 'Confirm'];
 
-/* Story-style progress: one bar per step, with the step name underneath. */
 function StepBars({ step }: { step: number }) {
   return (
     <View>
@@ -233,8 +191,6 @@ function StepBars({ step }: { step: number }) {
   );
 }
 
-/* A round pet photo with the gold ring, for the summary chip and the
-   review card. Falls back to the initial. */
 function MiniPet({ pet, size, ring = 2, pad = 2 }: { pet: any; size: number; ring?: number; pad?: number }) {
   const inner = size - (ring + pad) * 2;
   return (
@@ -275,8 +231,6 @@ function MiniPet({ pet, size, ring = 2, pad = 2 }: { pet: any; size: number; rin
   );
 }
 
-/* One thing picked on an earlier page, with a pencil to change it. Each
-   pick is its own chip, so it's clear which page "edit" goes back to. */
 function SummaryChip({
   pet, label, onPress, a11y,
 }: { pet?: any; label: string; onPress: () => void; a11y: string }) {
@@ -301,10 +255,6 @@ export default function BookScreen() {
   const bottomPad = useTabBarClearance();
   const { width: screenWidth } = useWindowDimensions();
 
-  /* Everything that depends on the screen width. The side margin tightens
-     on narrow phones, the content is capped on tablets, and the times
-     are cut to whole columns (floored, so rounding can never push the
-     last chip onto a new line). */
   const narrow = screenWidth < NARROW_WIDTH;
   const sidePad = narrow ? 16 : 24;
   const slotColumns = narrow ? 3 : 4;
@@ -321,13 +271,8 @@ export default function BookScreen() {
   const [selectedDate, setSelectedDate] = useState('');
   const [selectedTime, setSelectedTime] = useState('');
 
-  /* Which page of the flow is showing: 1 pet, 2 service, 3 date and time,
-     4 review. Services only appear once Continue is pressed on the pet
-     page, and so on. Going back keeps everything already picked. */
   const [page, setPage] = useState(1);
 
-  /* Where the time section starts, so picking a day can scroll to it.
-     A ref, because it is only read when that happens. */
   const scrollRef = useRef<ScrollView>(null);
   const sectionY = useRef<Record<number, number>>({});
   const scrollToSection = (n: number) => {
@@ -340,37 +285,27 @@ export default function BookScreen() {
     scrollRef.current?.scrollTo({ y: 0, animated: false });
   }, []);
 
-  /* The taken times for one date, stored with the date they belong to.
-     Everything the screen reads is derived from this, so there is no
-     state to reset when the date changes and nothing to get stuck:
-     a result for another date simply isn't used. */
   const [taken, setTaken] = useState<{ date: string; times: string[]; failed: boolean } | null>(null);
   const [retry, setRetry] = useState(0);
   const takenTimes = taken?.date === selectedDate ? taken.times : [];
   const loadingTimes = !!selectedDate && taken?.date !== selectedDate;
   const timesFailed = taken?.date === selectedDate && taken.failed;
 
-  /* Compared as minutes so "08:30 AM" and "08:30:00" are the same slot. */
   const takenMinutes = new Set(takenTimes.map(slotToMinutes));
   const isSlotTaken = (slot: string) => takenMinutes.has(slotToMinutes(slot));
 
   const [isBooking, setIsBooking] = useState(false);
-  /* A ref, not just state: state updates are async, so a fast double-tap
-     could enter submitBooking twice before `isBooking` is true. */
+
   const bookingLock = useRef(false);
   const [bookError, setBookError] = useState('');
   const [bookSuccess, setBookSuccess] = useState(false);
-  /* Snapshot of what was booked, so the success screen never depends on
-     live selection state that other logic may have cleared. */
+
   const [confirmation, setConfirmation] = useState<{
     pet: string; service: string; date: string; time: string;
   } | null>(null);
 
   const [services, setServices] = useState<any[]>([]);
 
-  /* The clinic can remove an owner (clients.deleted_at). A removed owner is
-     signed out with a clear message, and the database refuses their
-     bookings too, so a phone that's still signed in can't get around it. */
   const signOutRemoved = useCallback(async () => {
     await supabase.auth.signOut();
     Alert.alert(
@@ -412,15 +347,11 @@ export default function BookScreen() {
     }
   }, [signOutRemoved]);
 
-  /* Coming back to this screen also refreshes availability: someone else
-     may have booked while this one sat in the background. */
   useFocusEffect(useCallback(() => {
     loadData();
     setRetry((r) => r + 1);
   }, [loadData]));
 
-  /* The phone's back button steps back through the flow too, instead of
-     leaving the screen from the middle of a booking. */
   useFocusEffect(useCallback(() => {
     const sub = BackHandler.addEventListener('hardwareBackPress', () => {
       if (page > 1 && !bookSuccess) {
@@ -432,18 +363,12 @@ export default function BookScreen() {
     return () => sub.remove();
   }, [page, bookSuccess, goToPage]));
 
-  // Slots taken or freed by anyone (including the clinic's walk-ins) show up straight away
   useRealtimeRefresh('appointments', () => setRetry((r) => r + 1));
 
-  // Clinic changes to hours, closed days or services reach the screen without reopening it
   useRealtimeRefresh('booking_categories', () => loadData());
 
-  // A pet added or edited elsewhere appears in the list
   useRealtimeRefresh('pets', () => loadData());
 
-  /* Slots already booked on the chosen day, so someone can't pick a
-     time the clinic has filled — including times booked by OTHER owners.
-     Cancelled bookings free their slot again. `retry` re-runs it. */
   useEffect(() => {
     if (!selectedDate) return;
     let active = true;
@@ -457,15 +382,10 @@ export default function BookScreen() {
 
   const activeCategory = services.find((s: any) => s.name === selectedService) || null;
 
-  /* Slots are filtered to the category's own opening and closing times,
-     so a change in the admin reaches the app without a release. */
   const slots = buildSlots(activeCategory);
   const morningSlots = slots.filter((s) => slotToMinutes(s) < 12 * 60);
   const afternoonSlots = slots.filter((s) => slotToMinutes(s) >= 12 * 60);
 
-  /* The hours shown under the days come from the same rows the slots
-     are filtered by, so the note can never disagree with what is
-     actually bookable. (They were hardcoded strings before.) */
   const hoursNote =
     activeCategory?.opening_time && activeCategory?.last_slot
       ? `Open ${openDays(Number(activeCategory.closed_day ?? 0))}, ` +
@@ -479,8 +399,6 @@ export default function BookScreen() {
 
   const todayISO = toLocalISO(new Date());
 
-  /* The days on offer, starting today. Rebuilt only when the date rolls
-     over, so the strip doesn't redo its work on every keystroke elsewhere. */
   const days = useMemo(() => {
     const base = new Date();
     base.setHours(0, 0, 0, 0);
@@ -491,16 +409,11 @@ export default function BookScreen() {
     });
   }, [todayISO]);
 
-  /* Today stops being bookable once its final slot has passed, so the
-     strip doesn't offer a day with nothing left on it. Closed days
-     are handled separately — a Sunday isn't "full", it's shut. */
   const todayIsFull =
     !!selectedService &&
     !isClosedOn(new Date(), activeCategory) &&
     minutesNow() + LEAD_TIME_MINUTES > lastSlotMinutes(activeCategory);
 
-  /* The strip: which day is first in view (for the month name and the
-     previous/next buttons). */
   const stripRef = useRef<FlatList<Date>>(null);
   const [stripIndex, setStripIndex] = useState(0);
   const scrollStrip = (toIndex: number) => {
@@ -509,8 +422,6 @@ export default function BookScreen() {
   };
   const monthDay = days[stripIndex] ?? days[0];
 
-  /* Coming back to the date page with a day already chosen: bring it
-     into view. */
   useEffect(() => {
     if (page !== 3) return;
     const idx = selectedDate ? Math.max(0, days.findIndex((d) => toLocalISO(d) === selectedDate)) : 0;
@@ -519,13 +430,9 @@ export default function BookScreen() {
       stripRef.current?.scrollToOffset({ offset: idx * PILL_STEP, animated: false });
     }, 50);
     return () => clearTimeout(t);
-    // Only when the page opens: the chosen day itself is already in view
-    // whenever it changes.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+
   }, [page]);
 
-  /* A chosen time that has since been taken is no longer chosen, so a
-     taken slot can never reach the submit. */
   const chosenTime = selectedTime && isSlotTaken(selectedTime) ? '' : selectedTime;
 
   const canBook = !!(selectedPet && selectedService && selectedDate && chosenTime);
@@ -569,10 +476,6 @@ export default function BookScreen() {
         return;
       }
 
-      /* Re-check availability at the moment of booking. The list on screen
-         may be minutes old; another owner could have taken this time since.
-         This is a friendly early exit — the unique index in the database
-         (migration 027) is what actually guarantees no double booking. */
       const fresh = await fetchTakenTimes(selectedDate);
       if (fresh.failed) {
         setBookError('Couldn’t check availability. Please try again.');
