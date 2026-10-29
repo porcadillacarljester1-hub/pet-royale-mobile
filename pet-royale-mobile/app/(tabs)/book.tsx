@@ -29,11 +29,6 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 const FALLBACK_LAST_SLOT_MINUTES = 18 * 60 + 30;
 
-function isClosedOn(date: Date, category: any) {
-  if (!category) return false;
-  return date.getDay() === Number(category.closed_day ?? 0);
-}
-
 function slotToMinutes(slot: unknown) {
   const s = String(slot ?? '').trim();
 
@@ -103,22 +98,44 @@ function breakRange(c: any): [number, number] | null {
   return bs >= 0 && be > bs ? [bs, be] : null;
 }
 
-function buildSlots(category: any): string[] {
-  if (!category) return [];
-  const first = firstSlotMinutes(category);
-  const last = lastSlotMinutes(category);
-  const step = stepMinutes(category);
-  const dur = durationMinutes(category);
-  const br = breakRange(category);
+type Visit = {
+  opening: number;
+  last: number;
+  duration: number;
+  step: number;
+  closedDays: Set<number>;
+  breaks: [number, number][];
+};
+
+/* A visit can cover several services. It must fit inside every chosen
+   service's hours and closed days, and it lasts as long as all of them. */
+function combineServices(list: any[]): Visit | null {
+  if (list.length === 0) return null;
+  return {
+    opening: Math.max(...list.map(firstSlotMinutes)),
+    last: Math.min(...list.map(lastSlotMinutes)),
+    duration: list.reduce((sum, c) => sum + durationMinutes(c), 0),
+    step: Math.max(...list.map(stepMinutes)),
+    closedDays: new Set(list.map((c) => Number(c.closed_day ?? 0))),
+    breaks: list.map(breakRange).filter((r): r is [number, number] => r !== null),
+  };
+}
+
+function isClosedOn(date: Date, v: Visit | null) {
+  return !!v && v.closedDays.has(date.getDay());
+}
+
+function buildSlots(v: Visit | null): string[] {
+  if (!v) return [];
   const out: string[] = [];
-  for (let t = first; t <= last; t += step) {
-    if (br && t < br[1] && t + dur > br[0]) continue;
+  for (let t = v.opening; t <= v.last; t += v.step) {
+    if (v.breaks.some(([bs, be]) => t < be && t + v.duration > bs)) continue;
     out.push(slotLabel(t));
   }
   return out;
 }
 
-const closesAt = (c: any) => fmtTime(minutesToTimeColumn(lastSlotMinutes(c) + durationMinutes(c)));
+const closesAt = (v: Visit) => fmtTime(minutesToTimeColumn(v.last + v.duration));
 
 async function fetchTakenTimes(date: string): Promise<{ times: string[]; failed: boolean }> {
   const { data, error } = await (supabase as any).rpc('get_taken_times', { p_date: date });
@@ -267,7 +284,7 @@ export default function BookScreen() {
   const [loadError, setLoadError] = useState(false);
 
   const [selectedPet, setSelectedPet] = useState<any>(null);
-  const [selectedService, setSelectedService] = useState('');
+  const [selectedServices, setSelectedServices] = useState<string[]>([]);
   const [selectedDate, setSelectedDate] = useState('');
   const [selectedTime, setSelectedTime] = useState('');
 
@@ -380,22 +397,25 @@ export default function BookScreen() {
     return () => { active = false; };
   }, [selectedDate, retry]);
 
-  const activeCategory = services.find((s: any) => s.name === selectedService) || null;
+  const activeCategory = combineServices(
+    services.filter((s: any) => selectedServices.includes(s.name))
+  );
 
   const slots = buildSlots(activeCategory);
   const morningSlots = slots.filter((s) => slotToMinutes(s) < 12 * 60);
   const afternoonSlots = slots.filter((s) => slotToMinutes(s) >= 12 * 60);
 
-  const hoursNote =
-    activeCategory?.opening_time && activeCategory?.last_slot
-      ? `Open ${openDays(Number(activeCategory.closed_day ?? 0))}, ` +
-        `${fmtTime(activeCategory.opening_time)} – ${closesAt(activeCategory)}`
-      : '';
+  const hoursNote = activeCategory
+    ? [
+        activeCategory.closedDays.size === 1
+          ? `Open ${openDays(Array.from(activeCategory.closedDays)[0])}`
+          : '',
+        `${fmtTime(minutesToTimeColumn(activeCategory.opening))} – ${closesAt(activeCategory)}`,
+      ].filter(Boolean).join(', ')
+    : '';
   const latestClose = services.reduce((max, s) => Math.max(max, lastSlotMinutes(s)), 0);
   const closesEarly =
-    !!activeCategory?.last_slot &&
-    services.length > 1 &&
-    lastSlotMinutes(activeCategory) < latestClose;
+    !!activeCategory && services.length > 1 && activeCategory.last < latestClose;
 
   const todayISO = toLocalISO(new Date());
 
@@ -410,9 +430,9 @@ export default function BookScreen() {
   }, [todayISO]);
 
   const todayIsFull =
-    !!selectedService &&
+    !!activeCategory &&
     !isClosedOn(new Date(), activeCategory) &&
-    minutesNow() + LEAD_TIME_MINUTES > lastSlotMinutes(activeCategory);
+    minutesNow() + LEAD_TIME_MINUTES > activeCategory.last;
 
   const stripRef = useRef<FlatList<Date>>(null);
   const [stripIndex, setStripIndex] = useState(0);
@@ -435,12 +455,12 @@ export default function BookScreen() {
 
   const chosenTime = selectedTime && isSlotTaken(selectedTime) ? '' : selectedTime;
 
-  const canBook = !!(selectedPet && selectedService && selectedDate && chosenTime);
+  const canBook = !!(selectedPet && selectedServices.length > 0 && selectedDate && chosenTime);
 
   /* Whether the current page has what it needs for Continue. */
   const canAdvance =
     page === 1 ? !!selectedPet
-    : page === 2 ? !!selectedService
+    : page === 2 ? selectedServices.length > 0
     : page === 3 ? !!(selectedDate && chosenTime)
     : canBook;
 
@@ -497,7 +517,7 @@ export default function BookScreen() {
         pet_id: selectedPet.id,
         pet_name: selectedPet.name,
         pet_species: selectedPet.species,
-        service: selectedService,
+        service: selectedServices.join(', '),
         requested_date: selectedDate,
         scheduled_time: chosenTime,
         status: 'incoming',
@@ -528,7 +548,7 @@ export default function BookScreen() {
 
       setConfirmation({
         pet: selectedPet.name,
-        service: selectedService,
+        service: selectedServices.join(', '),
         date: selectedDate,
         time: chosenTime,
       });
@@ -555,12 +575,31 @@ export default function BookScreen() {
     setBookSuccess(false);
     setConfirmation(null);
     setSelectedPet(null);
-    setSelectedService('');
+    setSelectedServices([]);
     setSelectedDate('');
     setSelectedTime('');
     setBookError('');
     setTaken(null);
     setPage(1);
+  };
+
+  const toggleService = (name: string) => {
+    setBookError('');
+    const next = selectedServices.includes(name)
+      ? selectedServices.filter((n) => n !== name)
+      : [...selectedServices, name];
+    setSelectedServices(next);
+    setSelectedTime('');
+
+    // Drop the chosen day if the new combination closes on it, or if it has
+    // already closed for today.
+    if (selectedDate) {
+      const nextVisit = combineServices(services.filter((s: any) => next.includes(s.name)));
+      const picked = new Date(selectedDate + 'T00:00:00');
+      const tooLateToday =
+        selectedDate === todayISO && !!nextVisit && minutesNow() + LEAD_TIME_MINUTES > nextVisit.last;
+      if (isClosedOn(picked, nextVisit) || tooLateToday) setSelectedDate('');
+    }
   };
 
   /* The chevron steps back through the flow; on the first page it leaves
@@ -596,7 +635,7 @@ export default function BookScreen() {
 
   const footerLine =
     page === 1 ? (selectedPet ? selectedPet.name : 'Choose a pet to continue')
-    : page === 2 ? (selectedService ? `${selectedService} for ${selectedPet?.name ?? ''}` : 'Choose a service to continue')
+    : page === 2 ? (selectedServices.length > 0 ? `${selectedServices.join(', ')} for ${selectedPet?.name ?? ''}` : 'Choose a service to continue')
     : page === 3 ? (selectedDate && chosenTime ? `${shortDate(selectedDate)} · ${disp(chosenTime)}`
         : selectedDate ? 'Pick a time to continue' : 'Pick a day to continue')
     : '';
@@ -777,6 +816,15 @@ export default function BookScreen() {
     );
   };
 
+  const checkbox = (on: boolean) =>
+    on ? (
+      <View style={styles.checkOn}>
+        <Check size={14} color={colors.primaryFg} strokeWidth={3.2} />
+      </View>
+    ) : (
+      <View style={styles.checkOff} />
+    );
+
   const radio = (on: boolean) =>
     on ? (
       <View style={styles.radioOn}>
@@ -951,53 +999,27 @@ export default function BookScreen() {
             </View>
 
             <Text style={[styles.h2, { marginTop: 20 }]}>What does {selectedPet.name} need?</Text>
-            <Text style={styles.sub}>Choose one service.</Text>
+            <Text style={styles.sub}>Choose one or more services.</Text>
 
             {services.length === 0 && !loadError ? (
               <Text style={[styles.emptyNote, { marginTop: 16 }]}>
                 No services are available to book right now.
               </Text>
             ) : (
-              <View style={styles.optList} accessibilityRole="radiogroup">
+              <View style={styles.optList}>
                 {services.map((category: any) => {
                   const label = category.name;
                   const desc = category.description;
-                  const on = selectedService === label;
+                  const on = selectedServices.includes(label);
                   return (
                     <TouchableOpacity
                       key={label}
                       style={[styles.optRow, on && styles.optRowOn]}
-                      onPress={() => {
-                        setBookError('');
-
-                        /* Tap the chosen service again to unselect it.
-                           Times depend on the service's hours, so the
-                           time goes with it; the day stays. */
-                        if (on) {
-                          setSelectedService('');
-                          setSelectedTime('');
-                          return;
-                        }
-
-                        setSelectedService(label);
-                        setSelectedTime('');
-
-                        if (selectedDate) {
-                          const picked = new Date(selectedDate + 'T00:00:00');
-                          // Also drop a "today" that this service has
-                          // already closed for — the strip would grey
-                          // it out but it would stay selected.
-                          const tooLateToday =
-                            selectedDate === todayISO &&
-                            minutesNow() + LEAD_TIME_MINUTES > lastSlotMinutes(category);
-                          if (isClosedOn(picked, category) || tooLateToday) setSelectedDate('');
-                        }
-                      }}
+                      onPress={() => toggleService(label)}
                       activeOpacity={0.8}
-                      accessibilityRole="radio"
-                      accessibilityState={{ selected: on }}
+                      accessibilityRole="checkbox"
+                      accessibilityState={{ checked: on }}
                       accessibilityLabel={desc ? `${label}. ${desc}` : label}
-                      accessibilityHint={on ? 'Tap again to unselect' : undefined}
                     >
                       <View style={styles.serviceIcon}>
                         <ServiceIcon name={label} size={24} color={colors.primary} strokeWidth={1.9} />
@@ -1006,7 +1028,7 @@ export default function BookScreen() {
                         <Text style={styles.optTitle} maxFontSizeMultiplier={1.2}>{label}</Text>
                         {desc ? <Text style={styles.optMeta} maxFontSizeMultiplier={1.2}>{desc}</Text> : null}
                       </View>
-                      {radio(on)}
+                      {checkbox(on)}
                     </TouchableOpacity>
                   );
                 })}
@@ -1016,7 +1038,7 @@ export default function BookScreen() {
         )}
 
         {/* ── 3. Date and time ── */}
-        {page === 3 && selectedPet && !!selectedService && (
+        {page === 3 && selectedPet && selectedServices.length > 0 && (
           <View style={styles.pageTopChip}>
             <View style={styles.chipRow}>
               <SummaryChip
@@ -1026,9 +1048,9 @@ export default function BookScreen() {
                 a11y={`Change pet, currently ${selectedPet.name}`}
               />
               <SummaryChip
-                label={selectedService}
+                label={selectedServices.length > 1 ? `${selectedServices.length} services` : selectedServices[0]}
                 onPress={() => goToPage(2)}
-                a11y={`Change service, currently ${selectedService}`}
+                a11y={`Change services, currently ${selectedServices.join(', ')}`}
               />
             </View>
 
@@ -1151,7 +1173,7 @@ export default function BookScreen() {
                       <View style={styles.note}>
                         <Clock size={sz(12)} color={colors.mutedFg} />
                         <Text style={styles.noteText}>
-                          {activeCategory.name} closes at {closesAt(activeCategory)},
+                          This visit closes at {closesAt(activeCategory)},
                           earlier than the rest of the clinic.
                         </Text>
                       </View>
@@ -1164,7 +1186,7 @@ export default function BookScreen() {
         )}
 
         {/* ── 4. Review ── */}
-        {page === 4 && selectedPet && !!selectedService && !!selectedDate && !!chosenTime && (
+        {page === 4 && selectedPet && selectedServices.length > 0 && !!selectedDate && !!chosenTime && (
           <View style={styles.pageTop}>
             <Text style={styles.h2}>Review your visit</Text>
             <Text style={styles.sub}>Check the details, then confirm.</Text>
@@ -1191,11 +1213,11 @@ export default function BookScreen() {
 
               <View style={[styles.reviewRow, styles.reviewRowDivider]}>
                 <View style={styles.reviewIcon}>
-                  <ServiceIcon name={selectedService} size={24} color={colors.primary} strokeWidth={1.9} />
+                  <ServiceIcon name={selectedServices[0]} size={24} color={colors.primary} strokeWidth={1.9} />
                 </View>
                 <View style={styles.reviewCopy}>
-                  <Text style={styles.reviewLabel} maxFontSizeMultiplier={1.2}>Service</Text>
-                  <Text style={styles.reviewValue} maxFontSizeMultiplier={1.2}>{selectedService}</Text>
+                  <Text style={styles.reviewLabel} maxFontSizeMultiplier={1.2}>{selectedServices.length > 1 ? 'Services' : 'Service'}</Text>
+                  <Text style={styles.reviewValue} maxFontSizeMultiplier={1.2}>{selectedServices.join(', ')}</Text>
                 </View>
                 <TouchableOpacity
                   style={styles.reviewEdit}
@@ -1473,6 +1495,21 @@ const styles = StyleSheet.create({
     backgroundColor: colors.muted,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  checkOn: {
+    width: 26,
+    height: 26,
+    borderRadius: 8,
+    backgroundColor: colors.primary,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  checkOff: {
+    width: 26,
+    height: 26,
+    borderRadius: 8,
+    borderWidth: 2,
+    borderColor: '#B9B5A2',
   },
   radioOn: {
     width: 26,
